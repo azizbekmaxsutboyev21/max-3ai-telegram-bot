@@ -123,18 +123,40 @@ class GeminiService:
             logger.error(f"Ovozli xabarni tahlil qilishda xatolik: {e}")
             return f"⚠️ Ovozli xabarni eshitishda xatolik yuz berdi: {str(e)[:200]}"
 
-    async def generate_agent_reply(self, sender_name: str, message_text: str, custom_prompt: str) -> str:
+    async def generate_agent_reply(
+        self,
+        sender_name: str,
+        message_text: str,
+        custom_prompt: str,
+        mode: str = "as_me",
+        owner_info: str = ""
+    ) -> str:
         """Shaxsiy Telegram akkaunti (Userbot AI Agent) nomidan kelgan xabarlarga aqlli javob qaytarish"""
         try:
-            instruction = (
-                f"{custom_prompt}\n\n"
-                f"Siz hozir Telegram akkaunt egasining shaxsiy AI Kotibisiz (Agentisiz).\n"
-                f"Suhbatdosh: {sender_name}.\n"
-                f"Asosiy vazifangiz:\n"
-                f"- Foydalanuvchi bilan o'ta samimiy, xushmuomala va insoniy muloqot qiling.\n"
-                f"- Egasi hozir bandligi yoki tez orada ko'rib chiqishini bildiring.\n"
-                f"- Ortiqcha cho'zmasdan, lo'nda va tabiiy javob bering (1-3 jumla)."
-            )
+            if mode == "as_me":
+                # To'g'ridan-to'g'ri egasining nomidan (Birinchi shaxsda)
+                instruction = (
+                    "Siz to'g'ridan-to'g'ri Telegram akkaunt egasisiz (Ismingiz: Azizbek). Siz o'zingiz nomingizdan gapirasiz!\n"
+                    f"Akkaunt egasi (siz) haqingizda ma'lumotlar:\n{owner_info}\n\n"
+                    f"Hozirgi holat va ko'rsatmalar:\n{custom_prompt}\n\n"
+                    f"Suhbatdosh ismi: {sender_name}.\n"
+                    "MUHIM QOIDALAR:\n"
+                    "- Birinchi shaxsda ('men', 'hozir bandman', 'ko'rib chiqaman', 'salom') gapiring.\n"
+                    "- Aslo o'zingizni bot, sun'iy intellekt yoki dastur deb atamang! Oddiy inson kabi tabiiy, do'stona va xushmuomala yozing.\n"
+                    "- Qisqa, lo'nda va insoniy yozing (1-2 jumla kifoya)."
+                )
+            else:
+                # Egasining AI yordamchisi / kotibi sifatida
+                instruction = (
+                    "Siz Telegram akkaunt egasining (Azizbekning) shaxsiy AI Kotibisiz (Agentisiz).\n"
+                    f"Egasi haqida ma'lumotlar:\n{owner_info}\n\n"
+                    f"Hozirgi ko'rsatmalar:\n{custom_prompt}\n\n"
+                    f"Suhbatdosh ismi: {sender_name}.\n"
+                    "MUHIM QOIDALAR:\n"
+                    "- Egasi hozir biroz bandligini va xabarni unga yetkazib qo'yishingizni ayting.\n"
+                    "- O'ta samimiy, xushmuomala va insoniy muloqot qiling.\n"
+                    "- Qisqa va lo'nda javob bering (1-2 jumla)."
+                )
 
             def _call():
                 return self.client.models.generate_content(
@@ -149,9 +171,9 @@ class GeminiService:
             response = await asyncio.to_thread(_call)
             if response and response.text:
                 return response.text.strip()
-            return "Salom! Xabaringizni qabul qildim, tez orada o'zim ko'rib chiqib javob yozaman."
+            return "Salom! Xabaringizni ko'rdim, bo'shashim bilanoq o'zim yozaman."
         except Exception as e:
             logger.error(f"AI Agent javob yaratishda xatolik: {e}")
-            return "Salom! Xabaringizni qabul qildim, bo'shashim bilanoq o'zim yozaman."
+            return "Salom! Xabaringizni oldim, tez orada o'zim bog'lanaman."
 
 

@@ -8,11 +8,15 @@ logger = logging.getLogger(__name__)
 DB_FILE = "bot_data.json"
 
 DEFAULT_AGENT_PROMPT = (
-    "Siz mening shaxsiy AI assistentimsiz va mening nomimdan gapirasiz. "
-    "Hozir men biroz bandman yoki tarmoqda emasman. "
-    "Menga yozgan insonga o'ta xushmuomala, do'stona va aniq javob qaytaring. "
-    "Muhim savollarga imkon qadar yordam bering, zarur bo'lsa tez orada o'zim bog'lanishimni ma'lum qiling. "
-    "Javoblaringiz ixcham, tabiiy va samimiy bo'lsin."
+    "Hozir men biroz bandman yoki yo'ldaman. "
+    "Menga yozgan insonga o'ta samimiy, xushmuomala va tabiiy tarzda javob qaytaring. "
+    "Muhim savollarga imkon qadar yordam bering, zarur bo'lsa tez orada o'zim ko'rib chiqishimni ayting. "
+    "Javoblaringiz ixcham, do'stona va samimiy bo'lsin."
+)
+
+DEFAULT_OWNER_INFO = (
+    "Ism: Azizbek. Kasb: Dasturchi va AI muhandisi. "
+    "Telegram akkaunt egasi. O'zbek va rus tillarida erkin muloqot qiladi."
 )
 
 class DatabaseManager:
@@ -23,7 +27,9 @@ class DatabaseManager:
             "chats": {},      # {chat_id: {"title": str, "type": str, "username": str}}
             "agent_settings": {
                 "enabled": True,
+                "mode": "as_me",     # "as_me" (to'g'ridan-to'g'ri mening nomimdan) yoki "assistant" (yordamchi sifatida)
                 "prompt": DEFAULT_AGENT_PROMPT,
+                "owner_info": DEFAULT_OWNER_INFO,
                 "blacklist": [],
                 "replied_count": 0
             }
@@ -39,10 +45,15 @@ class DatabaseManager:
                     if "agent_settings" not in self.data:
                         self.data["agent_settings"] = {
                             "enabled": True,
+                            "mode": "as_me",
                             "prompt": DEFAULT_AGENT_PROMPT,
+                            "owner_info": DEFAULT_OWNER_INFO,
                             "blacklist": [],
                             "replied_count": 0
                         }
+                    else:
+                        self.data["agent_settings"].setdefault("mode", "as_me")
+                        self.data["agent_settings"].setdefault("owner_info", DEFAULT_OWNER_INFO)
             except Exception as e:
                 logger.error(f"Ma'lumotlar bazasini yuklashda xatolik: {e}")
 
@@ -142,9 +153,29 @@ class DatabaseManager:
         self.data["agent_settings"]["replied_count"] = self.data["agent_settings"].get("replied_count", 0) + 1
         self.save()
 
+    def get_agent_mode(self) -> str:
+        return self.data.get("agent_settings", {}).get("mode", "as_me")
+
+    def set_agent_mode(self, mode: str):
+        if "agent_settings" not in self.data:
+            self.data["agent_settings"] = {}
+        self.data["agent_settings"]["mode"] = mode
+        self.save()
+
+    def get_owner_info(self) -> str:
+        return self.data.get("agent_settings", {}).get("owner_info", DEFAULT_OWNER_INFO)
+
+    def set_owner_info(self, info: str):
+        if "agent_settings" not in self.data:
+            self.data["agent_settings"] = {}
+        self.data["agent_settings"]["owner_info"] = info.strip()
+        self.save()
+
     def get_agent_stats(self) -> Dict[str, Any]:
         return {
             "enabled": self.is_agent_enabled(),
+            "mode": self.get_agent_mode(),
+            "owner_info": self.get_owner_info(),
             "replied_count": self.data.get("agent_settings", {}).get("replied_count", 0),
             "blacklist_count": len(self.get_agent_blacklist())
         }

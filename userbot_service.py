@@ -5,6 +5,7 @@ from typing import Optional, Dict
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.types import User
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import config
 from db_manager import db
@@ -22,6 +23,11 @@ class UserbotService:
         self.me_name: Optional[str] = None
         self.is_running = False
         self._last_reply_times: Dict[int, float] = {}
+        # Bot xabarnomalari ID si orqali kim yozganini topish xaritasi
+        self.notification_map: Dict[int, int] = {}
+
+    def get_sender_for_notification(self, bot_msg_id: int) -> Optional[int]:
+        return self.notification_map.get(bot_msg_id)
 
     def set_bot_instance(self, bot):
         """Xabarnoma yuborish uchun aiogram Bot obyektini o'rnatish"""
@@ -117,10 +123,14 @@ class UserbotService:
                 await asyncio.sleep(2)
                 # Gemini orqali aqlli javob olish
                 agent_prompt = db.get_agent_prompt()
+                agent_mode = db.get_agent_mode()
+                owner_info = db.get_owner_info()
                 ai_reply = await self.gemini.generate_agent_reply(
                     sender_name=sender_name,
                     message_text=message_text,
-                    custom_prompt=agent_prompt
+                    custom_prompt=agent_prompt,
+                    mode=agent_mode,
+                    owner_info=owner_info
                 )
 
             # Javobni shaxsiy chatga jo'natish
@@ -131,20 +141,28 @@ class UserbotService:
             # Telegram Bot orqali egasiga xabarnoma jo'natish
             if self.bot_instance and config.CREATOR_ID:
                 uname = f"@{sender.username}" if sender.username else "mavjud emas"
+                mode_label = "👤 Sizning nomingizdan" if agent_mode == "as_me" else "🤖 AI Kotib sifatida"
                 notification_text = (
-                    "🤖 **[AI Agent Lichka Xabarnomasi]**\n\n"
+                    "📩 **[Lichka Xabarnomasi]**\n\n"
                     f"👤 **Kimdan:** {sender_name} ({uname})\n"
                     f"🆔 **ID:** `{sender.id}`\n"
                     f"💬 **Xabar:** {message_text}\n"
-                    f"✨ **AI Javobi:** {ai_reply}\n\n"
-                    f"💡 *Javob yozish uchun:* `/reply {sender.id} <matn>`"
+                    f"✨ **AI Javobi ({mode_label}):**\n_{ai_reply}_\n\n"
+                    f"💡 *Sizning nomingizdan javob yozish uchun: ushbu xabarga shunchaki Reply (Ответить) qilib yozing!*"
                 )
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [
+                        InlineKeyboardButton(text="🚫 Bloklash (Ignore)", callback_data=f"agent_block_{sender.id}")
+                    ]
+                ])
                 try:
-                    await self.bot_instance.send_message(
+                    sent_msg = await self.bot_instance.send_message(
                         chat_id=config.CREATOR_ID,
                         text=notification_text,
+                        reply_markup=kb,
                         parse_mode="Markdown"
                     )
+                    self.notification_map[sent_msg.message_id] = sender.id
                 except Exception as e:
                     logger.error(f"Xabarnoma jo'natishda xatolik: {e}")
 
