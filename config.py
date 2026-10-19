@@ -34,6 +34,26 @@ GEMINI_API_KEY = get_gemini_api_key()
 GEMINI_MODEL = get_gemini_model()
 CREATOR_ID = get_creator_id()
 
+def get_telegram_api_id() -> int:
+    val = os.getenv("TELEGRAM_API_ID", "").strip()
+    try:
+        return int(val) if val else 0
+    except ValueError:
+        return 0
+
+def get_telegram_api_hash() -> str:
+    return os.getenv("TELEGRAM_API_HASH", "").strip()
+
+def get_telegram_string_session() -> str:
+    return os.getenv("TELEGRAM_STRING_SESSION", "").strip()
+
+TELEGRAM_API_ID = get_telegram_api_id()
+TELEGRAM_API_HASH = get_telegram_api_hash()
+TELEGRAM_STRING_SESSION = get_telegram_string_session()
+
+def is_userbot_configured() -> bool:
+    return bool(TELEGRAM_API_ID and TELEGRAM_API_HASH and TELEGRAM_STRING_SESSION)
+
 DEFAULT_SYSTEM_PROMPT = (
     "Siz aqlli, do'stona va har tomonlama yordam beruvchi universal AI yordamchisiz. "
     "Foydalanuvchilar bilan asosan o'zbek tilida (yoki foydalanuvchi qaysi tilda yozsa, o'sha tilda) "

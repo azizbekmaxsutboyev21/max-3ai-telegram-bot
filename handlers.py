@@ -6,6 +6,9 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
     KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery,
     BufferedInputFile,
     ChatMemberUpdated
 )
@@ -14,6 +17,7 @@ import config
 from gemini_service import GeminiService
 from tts_service import synthesize_voice
 from db_manager import db
+from userbot_service import userbot
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +159,201 @@ async def handle_about(message: Message):
     )
     await message.answer(text, parse_mode="Markdown")
 
+# ----------------- SHAXSIY AI AGENT (USERBOT) BOSHQARUVI -----------------
+
+@router.message(Command("agent"))
+async def handle_agent_command(message: Message):
+    """Shaxsiy Telegram AI Agentini boshqarish"""
+    if message.from_user.id != config.CREATOR_ID:
+        await message.reply("⛔ Kechirasiz, bu buyruq faqat bot egasi uchun!")
+        return
+
+    args = message.text.split(maxsplit=2)
+
+    # 1. /agent on
+    if len(args) > 1 and args[1].lower() == "on":
+        db.set_agent_enabled(True)
+        await message.reply("🟢 **AI Agent (Auto-Responder) yoqildi!**\nShaxsiy lichkangizga kelgan xabarlarga AI sizning nomingizdan javob qaytaradi.", parse_mode="Markdown")
+        return
+
+    # 2. /agent off
+    if len(args) > 1 and args[1].lower() == "off":
+        db.set_agent_enabled(False)
+        await message.reply("🔴 **AI Agent o'chirildi!**\nShaxsiy xabarlarga avtomatik javob berilmaydi.", parse_mode="Markdown")
+        return
+
+    # 3. /agent prompt
+    if len(args) > 1 and args[1].lower() == "prompt":
+        if len(args) < 3:
+            current_prompt = db.get_agent_prompt()
+            await message.reply(f"📝 **Hozirgi AI Agent ko'rsatmasi (Prompt):**\n\n_{current_prompt}_\n\nO'zgartirish uchun: `/agent prompt <yangi ko'rsatma>`", parse_mode="Markdown")
+            return
+        new_prompt = args[2].strip()
+        db.set_agent_prompt(new_prompt)
+        await message.reply("✅ **AI Agent ko'rsatmasi yangilandi!**\nAI endi yangi ko'rsatma bo'yicha javob qaytaradi.", parse_mode="Markdown")
+        return
+
+    # 4. /agent ignore <user_id>
+    if len(args) > 1 and args[1].lower() == "ignore":
+        if len(args) < 3 or not args[2].isdigit():
+            await message.reply("Format: `/agent ignore <user_id>`")
+            return
+        uid = int(args[2])
+        db.add_to_blacklist(uid)
+        await message.reply(f"🚫 `{uid}` ID li foydalanuvchi qora ro'yxatga olindi (AI unga javob bermaydi).", parse_mode="Markdown")
+        return
+
+    # 5. /agent unignore <user_id>
+    if len(args) > 1 and args[1].lower() == "unignore":
+        if len(args) < 3 or not args[2].isdigit():
+            await message.reply("Format: `/agent unignore <user_id>`")
+            return
+        uid = int(args[2])
+        db.remove_from_blacklist(uid)
+        await message.reply(f"✅ `{uid}` qora ro'yxatdan chiqarildi.", parse_mode="Markdown")
+        return
+
+    # 6. /agent status va menyu
+    await send_agent_dashboard(message)
+
+async def send_agent_dashboard(message: Message):
+    status = userbot.get_status()
+    conn_text = "🟢 Ulangan (Faol)" if status["connected"] else ("⚠️ Sozlangan, lekin ulanmagan" if status["configured"] else "🔴 Ulanmagan (.env da sessiya yo'q)")
+    agent_switch = "🟢 Yoqilgan" if status["agent_enabled"] else "🔴 O'chirilgan"
+    user_info = f"{status['user_name']} (@{status['username']})" if status['user_name'] else "Aniqlanmagan"
+
+    text = (
+        "🤖 **Telegram AI Agent (Shaxsiy Kotib) Paneli**\n\n"
+        f"📱 **Shaxsiy akkaunt:** {user_info}\n"
+        f"🔌 **Ulanish holati:** {conn_text}\n"
+        f"⚡ **AI Avto-javob:** {agent_switch}\n"
+        f"💬 **Javob berilgan xabarlar:** {status['stats']['replied_count']} ta\n"
+        f"🚫 **Qora ro'yxatdagi shaxslar:** {status['stats']['blacklist_count']} ta\n\n"
+        "🛠 **Boshqaruv buyruqlari:**\n"
+        "🔹 `/agent on` — AI avto-javobni yoqish\n"
+        "🔹 `/agent off` — AI avto-javobni o'chirish\n"
+        "🔹 `/agent prompt <matn>` — AI xarakterini o'zgartirish\n"
+        "🔹 `/reply <user_id> <matn>` — Shaxsiy akkauntingiz nomidan javob yuborish\n"
+        "🔹 `/agent ignore <user_id>` — Belgilangan shaxsga javob bermaslik"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🟢 Yoqish" if not status["agent_enabled"] else "🔴 O'chirish", callback_data="agent_toggle"),
+            InlineKeyboardButton(text="📝 Promptni ko'rish", callback_data="agent_show_prompt")
+        ],
+        [
+            InlineKeyboardButton(text="🔄 Yangilash", callback_data="agent_refresh")
+        ]
+    ])
+    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+@router.callback_query(F.data.startswith("agent_"))
+async def handle_agent_callback(callback: CallbackQuery):
+    if callback.from_user.id != config.CREATOR_ID:
+        await callback.answer("Ruxsat berilmagan!", show_alert=True)
+        return
+
+    data = callback.data
+    if data == "agent_toggle":
+        new_state = not db.is_agent_enabled()
+        db.set_agent_enabled(new_state)
+        state_msg = "yoqildi" if new_state else "o'chirildi"
+        await callback.answer(f"AI Agent {state_msg}!")
+        status = userbot.get_status()
+        conn_text = "🟢 Ulangan (Faol)" if status["connected"] else ("⚠️ Sozlangan, lekin ulanmagan" if status["configured"] else "🔴 Ulanmagan")
+        agent_switch = "🟢 Yoqilgan" if status["agent_enabled"] else "🔴 O'chirilgan"
+        user_info = f"{status['user_name']} (@{status['username']})" if status['user_name'] else "Aniqlanmagan"
+
+        text = (
+            "🤖 **Telegram AI Agent (Shaxsiy Kotib) Paneli**\n\n"
+            f"📱 **Shaxsiy akkaunt:** {user_info}\n"
+            f"🔌 **Ulanish holati:** {conn_text}\n"
+            f"⚡ **AI Avto-javob:** {agent_switch}\n"
+            f"💬 **Javob berilgan xabarlar:** {status['stats']['replied_count']} ta\n"
+            f"🚫 **Qora ro'yxatdagi shaxslar:** {status['stats']['blacklist_count']} ta\n\n"
+            "🛠 **Boshqaruv buyruqlari:**\n"
+            "🔹 `/agent on` — AI avto-javobni yoqish\n"
+            "🔹 `/agent off` — AI avto-javobni o'chirish\n"
+            "🔹 `/agent prompt <matn>` — AI xarakterini o'zgartirish\n"
+            "🔹 `/reply <user_id> <matn>` — Shaxsiy akkauntingiz nomidan javob yuborish\n"
+            "🔹 `/agent ignore <user_id>` — Belgilangan shaxsga javob bermaslik"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🟢 Yoqish" if not status["agent_enabled"] else "🔴 O'chirish", callback_data="agent_toggle"),
+                InlineKeyboardButton(text="📝 Promptni ko'rish", callback_data="agent_show_prompt")
+            ],
+            [
+                InlineKeyboardButton(text="🔄 Yangilash", callback_data="agent_refresh")
+            ]
+        ])
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        except Exception:
+            pass
+
+    elif data == "agent_show_prompt":
+        prompt = db.get_agent_prompt()
+        await callback.message.answer(f"📝 **Hozirgi AI Agent ko'rsatmasi (Prompt):**\n\n_{prompt}_\n\nO'zgartirish uchun:\n`/agent prompt <yangi ko'rsatma>`", parse_mode="Markdown")
+        await callback.answer()
+
+    elif data == "agent_refresh":
+        await callback.answer("Yangilandi!")
+        status = userbot.get_status()
+        conn_text = "🟢 Ulangan (Faol)" if status["connected"] else ("⚠️ Sozlangan, lekin ulanmagan" if status["configured"] else "🔴 Ulanmagan")
+        agent_switch = "🟢 Yoqilgan" if status["agent_enabled"] else "🔴 O'chirilgan"
+        user_info = f"{status['user_name']} (@{status['username']})" if status['user_name'] else "Aniqlanmagan"
+
+        text = (
+            "🤖 **Telegram AI Agent (Shaxsiy Kotib) Paneli**\n\n"
+            f"📱 **Shaxsiy akkaunt:** {user_info}\n"
+            f"🔌 **Ulanish holati:** {conn_text}\n"
+            f"⚡ **AI Avto-javob:** {agent_switch}\n"
+            f"💬 **Javob berilgan xabarlar:** {status['stats']['replied_count']} ta\n"
+            f"🚫 **Qora ro'yxatdagi shaxslar:** {status['stats']['blacklist_count']} ta\n\n"
+            "🛠 **Boshqaruv buyruqlari:**\n"
+            "🔹 `/agent on` — AI avto-javobni yoqish\n"
+            "🔹 `/agent off` — AI avto-javobni o'chirish\n"
+            "🔹 `/agent prompt <matn>` — AI xarakterini o'zgartirish\n"
+            "🔹 `/reply <user_id> <matn>` — Shaxsiy akkauntingiz nomidan javob yuborish\n"
+            "🔹 `/agent ignore <user_id>` — Belgilangan shaxsga javob bermaslik"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🟢 Yoqish" if not status["agent_enabled"] else "🔴 O'chirish", callback_data="agent_toggle"),
+                InlineKeyboardButton(text="📝 Promptni ko'rish", callback_data="agent_show_prompt")
+            ],
+            [
+                InlineKeyboardButton(text="🔄 Yangilash", callback_data="agent_refresh")
+            ]
+        ])
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        except Exception:
+            pass
+
+@router.message(Command("reply"))
+async def handle_direct_reply(message: Message):
+    """Shaxsiy Telegram akkaunti nomidan belgilangan chat/shaxsga xabar yuborish"""
+    if message.from_user.id != config.CREATOR_ID:
+        return
+
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        await message.reply("❗ Format: `/reply <user_id yoki @username> <xabar matni>`\nMisol: `/reply 1234567 Salom, yaxshimisiz?`", parse_mode="Markdown")
+        return
+
+    target = args[1].strip()
+    reply_text = args[2].strip()
+    target_id = int(target) if (target.isdigit() or target.startswith("-")) else target
+
+    success = await userbot.send_direct_message(target_id, reply_text)
+    if success:
+        await message.reply(f"✅ Shaxsiy Telegram akkauntingiz nomidan `{target}` ga xabar yuborildi!", parse_mode="Markdown")
+    else:
+        await message.reply(f"❌ Xabar yuborishda xatolik. Shaxsiy akkaunt (Userbot) ulanganini tekshiring: /agent")
+
 # ----------------- YARATUVCHI (CREATOR / ADMIN) PANEL -----------------
 
 @router.message(Command("admin"))
@@ -171,6 +370,8 @@ async def handle_admin(message: Message):
         f"👥 **Guruhlar:** {stats['total_groups']}\n"
         f"📢 **Kanallar:** {stats['total_channels']}\n\n"
         "🛠 **Boshqaruv buyruqlari:**\n"
+        "🤖 `/agent` — Shaxsiy AI Agent (Kotib) boshqaruv paneli\n"
+        "💬 `/reply <ID/@username> <matn>` — Shaxsiy akkauntingiz nomidan xabar yozish\n"
         "🔹 `/send <ID/@username> <matn>` — Belgilangan odamga/guruhga bot nomidan xabar yuborish\n"
         "🔹 `/broadcast <matn>` — Barcha bot foydalanuvchilari va guruhlariga e'lon yuborish\n"
         "🔹 `/chats` — Bot a'zo bo'lgan barcha guruh va kanallar ro'yxati\n"

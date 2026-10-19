@@ -7,12 +7,26 @@ logger = logging.getLogger(__name__)
 
 DB_FILE = "bot_data.json"
 
+DEFAULT_AGENT_PROMPT = (
+    "Siz mening shaxsiy AI assistentimsiz va mening nomimdan gapirasiz. "
+    "Hozir men biroz bandman yoki tarmoqda emasman. "
+    "Menga yozgan insonga o'ta xushmuomala, do'stona va aniq javob qaytaring. "
+    "Muhim savollarga imkon qadar yordam bering, zarur bo'lsa tez orada o'zim bog'lanishimni ma'lum qiling. "
+    "Javoblaringiz ixcham, tabiiy va samimiy bo'lsin."
+)
+
 class DatabaseManager:
     def __init__(self, filename: str = DB_FILE):
         self.filename = filename
         self.data: Dict[str, Any] = {
             "users": {},      # {user_id: {"name": str, "username": str, "joined_at": str}}
             "chats": {},      # {chat_id: {"title": str, "type": str, "username": str}}
+            "agent_settings": {
+                "enabled": True,
+                "prompt": DEFAULT_AGENT_PROMPT,
+                "blacklist": [],
+                "replied_count": 0
+            }
         }
         self.load()
 
@@ -20,7 +34,15 @@ class DatabaseManager:
         if os.path.exists(self.filename):
             try:
                 with open(self.filename, "r", encoding="utf-8") as f:
-                    self.data = json.load(f)
+                    loaded = json.load(f)
+                    self.data.update(loaded)
+                    if "agent_settings" not in self.data:
+                        self.data["agent_settings"] = {
+                            "enabled": True,
+                            "prompt": DEFAULT_AGENT_PROMPT,
+                            "blacklist": [],
+                            "replied_count": 0
+                        }
             except Exception as e:
                 logger.error(f"Ma'lumotlar bazasini yuklashda xatolik: {e}")
 
@@ -71,6 +93,60 @@ class DatabaseManager:
             "total_groups": groups,
             "total_channels": channels,
             "total_chats": len(chats)
+        }
+
+    # ---------------- AI AGENT SOZLAMALARI ----------------
+    def is_agent_enabled(self) -> bool:
+        return self.data.get("agent_settings", {}).get("enabled", True)
+
+    def set_agent_enabled(self, enabled: bool):
+        if "agent_settings" not in self.data:
+            self.data["agent_settings"] = {}
+        self.data["agent_settings"]["enabled"] = enabled
+        self.save()
+
+    def get_agent_prompt(self) -> str:
+        return self.data.get("agent_settings", {}).get("prompt", DEFAULT_AGENT_PROMPT)
+
+    def set_agent_prompt(self, prompt: str):
+        if "agent_settings" not in self.data:
+            self.data["agent_settings"] = {}
+        self.data["agent_settings"]["prompt"] = prompt.strip()
+        self.save()
+
+    def get_agent_blacklist(self) -> List[int]:
+        return self.data.get("agent_settings", {}).get("blacklist", [])
+
+    def add_to_blacklist(self, user_id: int):
+        if "agent_settings" not in self.data:
+            self.data["agent_settings"] = {}
+        bl = self.data["agent_settings"].setdefault("blacklist", [])
+        if user_id not in bl:
+            bl.append(user_id)
+            self.save()
+
+    def remove_from_blacklist(self, user_id: int):
+        if "agent_settings" not in self.data:
+            return
+        bl = self.data["agent_settings"].get("blacklist", [])
+        if user_id in bl:
+            bl.remove(user_id)
+            self.save()
+
+    def is_blacklisted(self, user_id: int) -> bool:
+        return user_id in self.data.get("agent_settings", {}).get("blacklist", [])
+
+    def increment_agent_stat(self):
+        if "agent_settings" not in self.data:
+            self.data["agent_settings"] = {}
+        self.data["agent_settings"]["replied_count"] = self.data["agent_settings"].get("replied_count", 0) + 1
+        self.save()
+
+    def get_agent_stats(self) -> Dict[str, Any]:
+        return {
+            "enabled": self.is_agent_enabled(),
+            "replied_count": self.data.get("agent_settings", {}).get("replied_count", 0),
+            "blacklist_count": len(self.get_agent_blacklist())
         }
 
 db = DatabaseManager()

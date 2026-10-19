@@ -34,6 +34,13 @@ Faqat sizning Telegram hisobingiz (`ID: 5772939710`) uchun maxsus imkoniyatlar:
 - Istalgan matnli savolga o'zbek tilida batafsil javob.
 - Rasmlarni tahlil qilish, masalalarni yechish va tasvirlash.
 
+### 5. 🤖 Shaxsiy Telegram AI Agent (Userbot / Shaxsiy Kotib)
+Bot sizning shaxsiy Telegram akkauntingizga ulanib, sizning shaxsiy AI Kotibingiz sifatida ishlaydi:
+- **Shaxsiy lichkaga avto-javob:** Siz band bo'lganingizda, shaxsiy lichkangizga kelgan xabarlarga AI sizning nomingizdan samimiy va aqlli javob qaytaradi.
+- **Botga xabarnoma:** Lichkaga kim nima yozgani va AI unga nima deb javob bergani darhol botingizga bildirishnoma sifatida keladi.
+- **Shaxsiy akkauntdan xabar yozish:** `/reply <user_id> <matn>` orqali shaxsiy Telegramingiz nomidan istalgan odamga bot orqali javob yozish mumkin.
+- **Moslashuvchan boshqaruv:** `/agent` buyrug'i orqali AI ni yoqish/o'chirish (`/agent on`, `/agent off`), AI xarakterini o'zgartirish (`/agent prompt <matn>`) va qora ro'yxatni boshqarish.
+
 ---
 
 ## 🛠 Buyruqlar ro'yxati
@@ -45,14 +52,28 @@ Faqat sizning Telegram hisobingiz (`ID: 5772939710`) uchun maxsus imkoniyatlar:
 - `/about` — Bot haqida ma'lumot
 
 ### Yaratuvchi (Creator) uchun:
-- `/admin` — Boshqaruv paneli
-- `/send <target> <matn>` — Xabar yuborish
-- `/broadcast <matn>` — Xabar tarqatish
+- `/agent` — Shaxsiy AI Agent boshqaruv paneli (Holat, Yoqish/O'chirish, Statistika)
+- `/agent on` / `/agent off` — Shaxsiy lichkaga AI avto-javobni yoqish / o'chirish
+- `/agent prompt <matn>` — AI Agent xarakteri va ko'rsatmalarini o'zgartirish
+- `/reply <user_id> <matn>` — Shaxsiy akkauntingiz nomidan belgilangan kishiga xabar jo'natish
+- `/agent ignore <user_id>` — AI javob bermasligi uchun qora ro'yxatga kiritish
+- `/admin` — Umumiy boshqaruv paneli va statistika
+- `/send <target> <matn>` — Bot nomidan xabar yuborish
+- `/broadcast <matn>` — Umumiy e'lon tarqatish
 - `/chats` — Guruh va kanallar ro'yxati
 - `/post <kanal> <matn>` — Kanalga post
 - `/pin` — Xabarni qadash
 
 ---
+
+## 📲 Shaxsiy Telegram akkauntini ulash tartibi:
+1. Terminalda quyidagi buyruqni bering:
+   ```bash
+   python generate_session.py
+   ```
+2. Telefon raqamingizni kiriting (`+998...`) va Telegramingizga kelgan kodni yozing.
+3. Dastur avtomatik ravishda `.env` fayliga `TELEGRAM_STRING_SESSION` ni saqlaydi.
+4. Render.com ga deploy qilganda ham Environment Variables bo'limiga `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` va `TELEGRAM_STRING_SESSION` qiymatlarini kiritasiz.
 
 ## 🚀 Render.com serveriga joylash (Deploy qilish) bo'yicha qo'llanma
 

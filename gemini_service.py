@@ -123,4 +123,35 @@ class GeminiService:
             logger.error(f"Ovozli xabarni tahlil qilishda xatolik: {e}")
             return f"⚠️ Ovozli xabarni eshitishda xatolik yuz berdi: {str(e)[:200]}"
 
+    async def generate_agent_reply(self, sender_name: str, message_text: str, custom_prompt: str) -> str:
+        """Shaxsiy Telegram akkaunti (Userbot AI Agent) nomidan kelgan xabarlarga aqlli javob qaytarish"""
+        try:
+            instruction = (
+                f"{custom_prompt}\n\n"
+                f"Siz hozir Telegram akkaunt egasining shaxsiy AI Kotibisiz (Agentisiz).\n"
+                f"Suhbatdosh: {sender_name}.\n"
+                f"Asosiy vazifangiz:\n"
+                f"- Foydalanuvchi bilan o'ta samimiy, xushmuomala va insoniy muloqot qiling.\n"
+                f"- Egasi hozir bandligi yoki tez orada ko'rib chiqishini bildiring.\n"
+                f"- Ortiqcha cho'zmasdan, lo'nda va tabiiy javob bering (1-3 jumla)."
+            )
+
+            def _call():
+                return self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=message_text,
+                    config=types.GenerateContentConfig(
+                        system_instruction=instruction,
+                        temperature=0.6,
+                    )
+                )
+
+            response = await asyncio.to_thread(_call)
+            if response and response.text:
+                return response.text.strip()
+            return "Salom! Xabaringizni qabul qildim, tez orada o'zim ko'rib chiqib javob yozaman."
+        except Exception as e:
+            logger.error(f"AI Agent javob yaratishda xatolik: {e}")
+            return "Salom! Xabaringizni qabul qildim, bo'shashim bilanoq o'zim yozaman."
+
 

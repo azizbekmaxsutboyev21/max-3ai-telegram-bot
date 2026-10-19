@@ -17,3 +17,9 @@ services:
         value: gemini-3.8-flash
       - key: CREATOR_ID
         value: "5772939710"
+      - key: TELEGRAM_API_ID
+        sync: false
+      - key: TELEGRAM_API_HASH
+        sync: false
+      - key: TELEGRAM_STRING_SESSION
+        sync: false

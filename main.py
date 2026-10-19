@@ -17,6 +17,7 @@ from aiogram.enums import ParseMode
 from aiohttp import web
 import config
 from handlers import router
+from userbot_service import userbot
 
 # Loglarni sozlash
 logging.basicConfig(
@@ -48,8 +49,9 @@ async def set_bot_commands(bot: Bot):
     """Telegram menyusida chiqadigan buyruqlar ro'yxatini sozlash"""
     commands = [
         BotCommand(command="start", description="Botni ishga tushirish"),
-        BotCommand(command="reset", description="Suhbat tarixini tozalash"),
+        BotCommand(command="agent", description="AI Agent (Shaxsiy Kotib) paneli"),
         BotCommand(command="admin", description="Boshqaruv paneli (Yaratuvchi)"),
+        BotCommand(command="reset", description="Suhbat tarixini tozalash"),
         BotCommand(command="help", description="Qo'llanma va yordam"),
         BotCommand(command="about", description="Bot haqida ma'lumot"),
     ]
@@ -80,6 +82,14 @@ async def main():
     # Menyu buyruqlarini o'rnatish
     await set_bot_commands(bot)
 
+    # Shaxsiy Telegram AI Agentini (Userbot) ishga tushirish
+    userbot.set_bot_instance(bot)
+    if config.is_userbot_configured():
+        logger.info("Shaxsiy Telegram AI Agenti (Userbot) ulanmoqda...")
+        await userbot.start()
+    else:
+        logger.info("Userbot hozircha ulanmagan. Ulanish uchun TELEGRAM_STRING_SESSION talab qilinadi.")
+
     # Bot ma'lumotlarini chop etish
     bot_info = await bot.get_me()
     logger.info(f"Bot muvaffaqiyatli ishga tushdi: @{bot_info.username} ({bot_info.first_name})")
@@ -87,6 +97,8 @@ async def main():
     print(f"✅ Bot faol: @{bot_info.username}")
     print(f"🤖 Gemini modeli: {config.GEMINI_MODEL}")
     print(f"👑 Yaratuvchi ID: {config.CREATOR_ID}")
+    agent_st = userbot.get_status()
+    print(f"📱 Shaxsiy AI Agent: {'🟢 Faol' if agent_st['connected'] else '🔴 Ulanmagan'}")
     print("=" * 50 + "\n")
 
     # Eski kutilayotgan yangilanishlarni o'tkazib yuborish
@@ -96,6 +108,7 @@ async def main():
     try:
         await dp.start_polling(bot)
     finally:
+        await userbot.stop()
         await bot.session.close()
 
 if __name__ == "__main__":
