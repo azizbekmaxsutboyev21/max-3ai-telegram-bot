@@ -3,6 +3,8 @@ import os
 import logging
 from typing import Dict, List, Any
 
+import config
+
 logger = logging.getLogger(__name__)
 
 DB_FILE = "bot_data.json"
@@ -25,6 +27,10 @@ class DatabaseManager:
         self.data: Dict[str, Any] = {
             "users": {},      # {user_id: {"name": str, "username": str, "joined_at": str}}
             "chats": {},      # {chat_id: {"title": str, "type": str, "username": str}}
+            "auth": {
+                "access_code": config.get_access_code(),
+                "authenticated_users": []
+            },
             "agent_settings": {
                 "enabled": True,
                 "mode": "as_me",     # "as_me" (to'g'ridan-to'g'ri mening nomimdan) yoki "assistant" (yordamchi sifatida)
@@ -42,6 +48,14 @@ class DatabaseManager:
                 with open(self.filename, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
                     self.data.update(loaded)
+                    if "auth" not in self.data:
+                        self.data["auth"] = {
+                            "access_code": config.get_access_code(),
+                            "authenticated_users": []
+                        }
+                    else:
+                        self.data["auth"].setdefault("access_code", config.get_access_code())
+                        self.data["auth"].setdefault("authenticated_users", [])
                     if "agent_settings" not in self.data:
                         self.data["agent_settings"] = {
                             "enabled": True,
@@ -179,5 +193,38 @@ class DatabaseManager:
             "replied_count": self.data.get("agent_settings", {}).get("replied_count", 0),
             "blacklist_count": len(self.get_agent_blacklist())
         }
+
+    # ---------------- XAVFSIZLIK VA AUTENTIFIKATSIYA ----------------
+    def get_access_code(self) -> str:
+        code = self.data.get("auth", {}).get("access_code")
+        if not code:
+            code = config.get_access_code()
+            if "auth" not in self.data:
+                self.data["auth"] = {}
+            self.data["auth"]["access_code"] = code
+            self.save()
+        return str(code).strip()
+
+    def set_access_code(self, new_code: str):
+        if "auth" not in self.data:
+            self.data["auth"] = {}
+        self.data["auth"]["access_code"] = str(new_code).strip()
+        self.save()
+
+    def is_authenticated(self, user_id: int) -> bool:
+        auth_users = self.data.get("auth", {}).get("authenticated_users", [])
+        return user_id in auth_users
+
+    def set_authenticated(self, user_id: int, status: bool):
+        if "auth" not in self.data:
+            self.data["auth"] = {"access_code": config.get_access_code(), "authenticated_users": []}
+        auth_users = self.data["auth"].setdefault("authenticated_users", [])
+        if status:
+            if user_id not in auth_users:
+                auth_users.append(user_id)
+        else:
+            if user_id in auth_users:
+                auth_users.remove(user_id)
+        self.save()
 
 db = DatabaseManager()

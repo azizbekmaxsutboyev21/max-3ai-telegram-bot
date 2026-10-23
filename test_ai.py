@@ -19,32 +19,43 @@ def test_connection():
     print("🤖 Google Gemini API ulanishini tekshirish...")
     print("=" * 50)
 
-    if not config.GEMINI_API_KEY:
-        print("❌ XATOLIK: .env faylida GEMINI_API_KEY topilmadi!")
+    if not config.GEMINI_API_KEYS:
+        print("❌ XATOLIK: .env faylida GEMINI_API_KEY yoki GEMINI_API_KEYS topilmadi!")
         print("Iltimos, .env faylini ochib, GEMINI_API_KEY qiymatini kiriting.")
         sys.exit(1)
 
-    try:
-        client = genai.Client(api_key=config.GEMINI_API_KEY)
-        print(f"📡 Model: {config.GEMINI_MODEL}")
-        print("⏳ Test so'rovi yuborilmoqda...")
+    print(f"🔑 Aniqlangan API kalitlar soni: {len(config.GEMINI_API_KEYS)}")
+    print(f"📡 Asosiy model: {config.GEMINI_MODEL}")
+    print(f"🛡 Zaxira modellar: {', '.join(config.GEMINI_FALLBACK_MODELS)}")
+    print("⏳ Test so'rovi yuborilmoqda...")
 
-        response = client.models.generate_content(
-            model=config.GEMINI_MODEL,
-            contents="Salom! O'zingni qisqacha bir gap bilan tanishtir.",
-            config=types.GenerateContentConfig(
-                system_instruction="Siz aqlli o'zbek AI yordamchisiz.",
-            )
-        )
+    success = False
+    for model in config.GEMINI_FALLBACK_MODELS:
+        for key in config.GEMINI_API_KEYS:
+            try:
+                client = genai.Client(api_key=key)
+                response = client.models.generate_content(
+                    model=model,
+                    contents="Salom! O'zingni qisqacha bir gap bilan tanishtir.",
+                    config=types.GenerateContentConfig(
+                        system_instruction="Siz aqlli o'zbek AI yordamchisiz.",
+                    )
+                )
+                print("\n✅ API MUVAFFAQIYATLI ULINDI!")
+                print(f"Ishlagan model: {model}")
+                print(f"Javob: {response.text.strip()}")
+                print("=" * 50)
+                print("Endi botni ishga tushirishingiz mumkin: python main.py\n")
+                success = True
+                break
+            except Exception as e:
+                print(f"⚠️ Model {model} bilan sinovda xatolik: {e}")
+        if success:
+            break
 
-        print("\n✅ API MUVAFFAQIYATLI ULINDI!")
-        print(f"Javob: {response.text.strip()}")
-        print("=" * 50)
-        print("Endi botni ishga tushirishingiz mumkin: python main.py\n")
-
-    except Exception as e:
-        print(f"\n❌ XATOLIK YUZ BERDI: {e}")
-        print("Iltimos, API kalitingiz to'g'riligini va internet ulanishini tekshiring.")
+    if not success:
+        print("\n❌ Barcha kalitlar va modellar bilan ulanish amalga oshmadi.")
+        print("Iltimos, API kalitlaringiz to'g'riligini va internet ulanishini tekshiring.")
         sys.exit(1)
 
 if __name__ == "__main__":

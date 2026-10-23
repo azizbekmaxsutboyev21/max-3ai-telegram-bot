@@ -17,11 +17,27 @@ def get_bot_token() -> str:
     return os.getenv("BOT_TOKEN", "").strip()
 
 def get_gemini_api_key() -> str:
+    keys = get_gemini_api_keys()
+    return keys[0] if keys else ""
+
+def get_gemini_api_keys() -> list[str]:
     load_dotenv(override=True)
-    return os.getenv("GEMINI_API_KEY", "").strip()
+    raw = os.getenv("GEMINI_API_KEYS", "") or os.getenv("GEMINI_API_KEY", "")
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
+    return keys
 
 def get_gemini_model() -> str:
-    return os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+    return os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+
+def get_gemini_fallback_models() -> list[str]:
+    """Asosiy model 503 yoki limitga tushganda avtomatik o'tish uchun zaxira modellar"""
+    primary = get_gemini_model()
+    defaults = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash"]
+    models = [primary]
+    for m in defaults:
+        if m not in models:
+            models.append(m)
+    return models
 
 def get_creator_id() -> int:
     try:
@@ -29,10 +45,17 @@ def get_creator_id() -> int:
     except ValueError:
         return 5772939710
 
+def get_access_code() -> str:
+    load_dotenv(override=True)
+    return os.getenv("ACCESS_CODE", "7777").strip()
+
 BOT_TOKEN = get_bot_token()
+GEMINI_API_KEYS = get_gemini_api_keys()
 GEMINI_API_KEY = get_gemini_api_key()
 GEMINI_MODEL = get_gemini_model()
+GEMINI_FALLBACK_MODELS = get_gemini_fallback_models()
 CREATOR_ID = get_creator_id()
+ACCESS_CODE = get_access_code()
 
 def get_telegram_api_id() -> int:
     val = os.getenv("TELEGRAM_API_ID", "").strip()
@@ -69,8 +92,8 @@ def validate_config() -> bool:
     missing = []
     if not BOT_TOKEN:
         missing.append("BOT_TOKEN (Telegram @BotFather orqali olingan token)")
-    if not GEMINI_API_KEY:
-        missing.append("GEMINI_API_KEY (Google AI Studio orqali olingan API kalit)")
+    if not GEMINI_API_KEYS:
+        missing.append("GEMINI_API_KEY yoki GEMINI_API_KEYS (Google AI Studio orqali olingan API kalit)")
     
     if missing:
         print("\n" + "=" * 60)

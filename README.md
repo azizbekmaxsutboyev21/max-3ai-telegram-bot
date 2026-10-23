@@ -52,6 +52,8 @@ Bot sizning shaxsiy Telegram akkauntingizga ulanib, sizning shaxsiy AI Kotibingi
 - `/about` — Bot haqida ma'lumot
 
 ### Yaratuvchi (Creator) uchun:
+- `🔒 /lock` — Botni darhol qulflash (keyingi murojaatda maxfiy kod so'raladi)
+- `🔑 /setcode <kod>` — Maxfiy kirish kodini o'zgartirish
 - `/agent` — Shaxsiy AI Agent boshqaruv paneli (Holat, Yoqish/O'chirish, Statistika)
 - `/agent on` / `/agent off` — Shaxsiy lichkaga AI avto-javobni yoqish / o'chirish
 - `/agent prompt <matn>` — AI Agent xarakteri va ko'rsatmalarini o'zgartirish
@@ -98,8 +100,8 @@ Bot Render.com da bepul (Free tier) rejimida uzluksiz ishlashga to'liq moslashti
 ### 4-qadam: Muhit o'zgaruvchilari (Environment Variables)
 **Environment** bo'limida quyidagi o'zgaruvchilarni qo'shing:
 - `BOT_TOKEN` = Sizning Telegram bot tokeningiz (@BotFather dan)
-- `GEMINI_API_KEY` = Sizning Google Gemini API kalitingiz
-- `GEMINI_MODEL` = `gemini-3.8-flash`
+- `GEMINI_API_KEY` (yoki `GEMINI_API_KEYS`) = Google Gemini API kalit(lar)ingiz. Kvota tugamasligi uchun bir nechta kalitni vergul bilan yozish mumkin: `kalit1,kalit2,kalit3`
+- `GEMINI_MODEL` = `gemini-2.5-flash` (tavsiya etiladi; server band bo'lsa bot avtomatik zaxira modellarga o'tadi)
 - `CREATOR_ID` = `5772939710`
 - `PYTHON_VERSION` = `3.11.4`
 

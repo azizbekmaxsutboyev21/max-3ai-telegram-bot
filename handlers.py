@@ -1,11 +1,12 @@
 import io
 import logging
-from aiogram import Router, F, Bot
+from aiogram import Router, F, Bot, BaseMiddleware
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
     KeyboardButton,
+    ReplyKeyboardRemove,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     CallbackQuery,
@@ -28,10 +29,121 @@ gemini = GeminiService()
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💬 Yangi suhbat"), KeyboardButton(text="🎙 Ovozli yordam")],
-        [KeyboardButton(text="ℹ️ Bot haqida"), KeyboardButton(text="💡 Yordam")]
+        [KeyboardButton(text="ℹ️ Bot haqida"), KeyboardButton(text="💡 Yordam")],
+        [KeyboardButton(text="🔒 Qulflash"), KeyboardButton(text="🔑 Kodni o'zgartirish")]
     ],
     resize_keyboard=True
 )
+
+class PrivateAuthMiddleware(BaseMiddleware):
+    """
+    Faqat bot egasiga ruxsat berish va maxfiy PIN-kod (passcode) bilan
+    avtorizatsiya qilish xavfsizlik middleware-si.
+    """
+    async def __call__(self, handler, event, data):
+        user = getattr(event, "from_user", None)
+        if not user:
+            return await handler(event, data)
+
+        # 1. Begonalarni to'liq bloklash (Faqat egasi foydalana oladi)
+        if user.id != config.CREATOR_ID:
+            if isinstance(event, Message):
+                await event.answer(
+                    "⛔️ **Kirish taqiqlangan!**\n\n"
+                    "Ushbu bot shaxsiy bot bo'lib, faqat uning egasi uchun mo'ljallangan.",
+                    parse_mode="Markdown"
+                )
+            elif isinstance(event, CallbackQuery):
+                await event.answer("⛔️ Kirish taqiqlangan! Ushbu bot shaxsiy.", show_alert=True)
+            return
+
+        # 2. Bot egasi uchun xavfsizlik tekshiruvi (Kod / Parol)
+        if isinstance(event, Message) and event.text:
+            text = event.text.strip()
+
+            # Qulflash buyrug'i
+            if text in ["/lock", "🔒 Qulflash"]:
+                db.set_authenticated(user.id, False)
+                await event.answer(
+                    "🔒 **Bot muvaffaqiyatli qulflandi!**\n\n"
+                    "Qayta kirish uchun maxfiy kodingizni kiriting:",
+                    reply_markup=ReplyKeyboardRemove(),
+                    parse_mode="Markdown"
+                )
+                return
+
+            # Kodni o'zgartirish buyrug'i
+            if text.startswith("/setcode") or text.startswith("/setpass"):
+                if not db.is_authenticated(user.id):
+                    await event.answer("🔐 Avval joriy maxfiy kodni kiritib, botni oching!")
+                    return
+                parts = text.split(maxsplit=1)
+                if len(parts) == 2 and parts[1].strip():
+                    new_code = parts[1].strip()
+                    db.set_access_code(new_code)
+                    await event.answer(
+                        f"✅ **Yangi kirish kodi muvaffaqiyatli o'rnatildi:** `{new_code}`\n\n"
+                        "Uni eslab qoling! Botni qulflash uchun: /lock",
+                        parse_mode="Markdown"
+                    )
+                else:
+                    await event.answer(
+                        "❗ **Format:** `/setcode <yangi_kod>`\n"
+                        "Misol: `/setcode 9988` yoki `/setcode maxfiy_parol`",
+                        parse_mode="Markdown"
+                    )
+                return
+
+            if text == "🔑 Kodni o'zgartirish":
+                await event.answer(
+                    "🔑 **Kodni o'zgartirish:**\n\n"
+                    "Yangi kod o'rnatish uchun quyidagi formatda yuboring:\n"
+                    "`/setcode <yangi_kod>`\n\n"
+                    "Misol: `/setcode 9988`",
+                    parse_mode="Markdown"
+                )
+                return
+
+            # Agar egasi hali tasdiqlanmagan (bot qulflangan) bo'lsa
+            if not db.is_authenticated(user.id):
+                current_code = db.get_access_code()
+                if text == current_code:
+                    db.set_authenticated(user.id, True)
+                    await event.answer(
+                        "🔓 **Muvaffaqiyatli tasdiqlandi!** Xush kelibsiz, xo'jayin.\n\n"
+                        "Botdan to'liq foydalanishingiz mumkin. Savolingizni bemalol yuboring!\n\n"
+                        "🔒 Qulflash: `/lock`\n"
+                        "🔑 Kodni o'zgartirish: `/setcode <yangi_kod>`",
+                        reply_markup=main_keyboard,
+                        parse_mode="Markdown"
+                    )
+                    return
+                else:
+                    await event.answer(
+                        "🔐 **Xavfsizlik tekshiruvi (Bot qulflangan):**\n\n"
+                        "Iltimos, botdan foydalanish uchun maxfiy kirish kodingizni kiriting:",
+                        parse_mode="Markdown"
+                    )
+                    return
+
+        # Qulflangan paytda matnsiz xabarlar (audio, rasm va h.k.)
+        if not db.is_authenticated(user.id):
+            if isinstance(event, Message):
+                await event.answer(
+                    "🔐 **Bot qulflangan!**\n\n"
+                    "Iltimos, avval maxfiy kirish kodingizni matn ko'rinishida kiriting.",
+                    parse_mode="Markdown"
+                )
+            elif isinstance(event, CallbackQuery):
+                await event.answer("🔐 Avval maxfiy kodni kiriting!", show_alert=True)
+            return
+
+        # Tasdiqlangan foydalanuvchi xabarlarini normal handlerlarga yo'naltirish
+        return await handler(event, data)
+
+# Middleware-ni barcha xabarlar va callback-lar uchun ro'yxatdan o'tkazamiz
+router.message.middleware(PrivateAuthMiddleware())
+router.callback_query.middleware(PrivateAuthMiddleware())
 
 def split_message(text: str, max_length: int = 4000) -> list[str]:
     """Telegram xabar cheklovi (4096 belgi) uchun matnni bo'laklarga ajratish"""
@@ -93,7 +205,7 @@ async def handle_start(message: Message):
 
     text = (
         f"Assalomu alaykum, {user.first_name}! 👋\n\n"
-        "Men **Google Gemini 3.8 Flash AI** texnologiyasiga asoslangan aqlli Telegram botman.\n"
+        "Men **Google Gemini AI** texnologiyasiga asoslangan aqlli Telegram botman.\n"
         f"{creator_badge}\n\n"
         "Quyidagi imkoniyatlarga egaman:\n"
         "🔹 **Matnli savol-javob:** Istalgan mavzuda yozing\n"
@@ -109,7 +221,9 @@ async def handle_start(message: Message):
 async def handle_help(message: Message):
     is_creator = (message.from_user.id == config.CREATOR_ID)
     admin_help = (
-        "\n\n👑 **Yaratuvchi (Admin) buyruqlari:**\n"
+        "\n\n👑 **Xavfsizlik va Boshqaruv buyruqlari:**\n"
+        "🔒 `/lock` - Botni qulflash (qayta kirishda kod so'raydi)\n"
+        "🔑 `/setcode <kod>` - Maxfiy kirish kodini o'zgartirish\n"
         "/admin - Boshqaruv paneli va statistika\n"
         "/send <ID/@username> <matn> - Belgilangan odam yoki chatga xabar yuborish\n"
         "/broadcast <matn> - Barcha a'zolarga va guruhlarga e'lon tarqatish\n"
