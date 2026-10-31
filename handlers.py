@@ -515,12 +515,31 @@ async def handle_admin_callbacks(callback: CallbackQuery):
 # ----------------- SHAXSIY AI KOTIB (USERBOT) MENYUSI -----------------
 
 def build_agent_dashboard():
-    status = userbot.get_status()
-    conn_text = "🟢 Ulangan (Faol)" if status["connected"] else "🔴 Ulanmagan"
-    agent_switch = "🟢 Yoqilgan" if status["agent_enabled"] else "🔴 O'chirilgan"
+    try:
+        status = userbot.get_status()
+    except Exception:
+        status = {
+            "configured": False,
+            "connected": False,
+            "user_name": "Aniqlanmagan",
+            "username": "",
+            "agent_enabled": db.is_agent_enabled(),
+            "stats": db.get_agent_stats()
+        }
+
+    conn_text = "🟢 Ulangan (Faol)" if status.get("connected") else "🔴 Ulanmagan"
+    agent_switch = "🟢 Yoqilgan" if status.get("agent_enabled") else "🔴 O'chirilgan"
     mode_text = "👤 Sizning nomingizdan" if db.get_agent_mode() == "as_me" else "🤖 AI Kotib sifatida"
-    user_info = f"{status['user_name']} (@{status['username']})" if status['user_name'] else "Aniqlanmagan"
-    filter_st = "🟢 Yoqilgan (Keraksiz xabarlarga javob yo'q)" if status["stats"]["smart_filter"] else "🔴 O'chirilgan"
+    
+    uname = status.get("username") or ""
+    uname_str = f" (@{uname})" if uname else ""
+    user_name = status.get("user_name") or "Aniqlanmagan"
+    user_info = f"{user_name}{uname_str}".replace("_", "\\_")
+
+    stats_dict = status.get("stats", {})
+    replied = stats_dict.get("replied_count", 0)
+    bl_count = stats_dict.get("blacklist_count", 0)
+    filter_st = "🟢 Yoqilgan" if stats_dict.get("smart_filter", True) else "🔴 O'chirilgan"
 
     text = (
         "🤖 **Telegram AI Agent (Shaxsiy Kotib) Paneli**\n\n"
@@ -529,15 +548,19 @@ def build_agent_dashboard():
         f"⚡ **Avto-javob:** {agent_switch}\n"
         f"🛡 **Aqlli filtr:** {filter_st}\n"
         f"🎭 **Javob berish uslubi:** {mode_text}\n"
-        f"💬 **Javob berilgan:** {status['stats']['replied_count']} ta\n"
-        f"🚫 **Qora ro'yxat:** {status['stats']['blacklist_count']} ta\n\n"
-        "💡 *Eslatma: Bir vaqtda bir nechta xabar kelsa bitta qilib javob beriladi va takroriy salomlashilmaydi!*"
+        f"💬 **Javob berilgan:** {replied} ta\n"
+        f"🚫 **Qora ro'yxat:** {bl_count} ta\n\n"
+        "💡 *Quyidagi tugmalar yoki buyruqlar orqali boshqarishingiz mumkin:*\n"
+        "• `/agent on` yoki `/agent off` — Yoqish / O'chirish\n"
+        "• `/agent mode as_me` (Mening nomimdan) / `assistant` (Kotib)\n"
+        "• `/agent prompt <matn>` — AI xarakteri va ko'rsatmasi\n"
+        "• `/agent ignore <id>` — Bloklash"
     )
 
     mode_btn = "🔄 Uslub: Kotibga o'tish" if db.get_agent_mode() == "as_me" else "🔄 Uslub: Mening nomimga o'tish"
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🟢 Yoqish" if not status["agent_enabled"] else "🔴 O'chirish", callback_data="agent_toggle"),
+            InlineKeyboardButton(text="🟢 Yoqish" if not status.get("agent_enabled") else "🔴 O'chirish", callback_data="agent_toggle"),
             InlineKeyboardButton(text=mode_btn, callback_data="agent_toggle_mode")
         ],
         [
@@ -551,11 +574,101 @@ def build_agent_dashboard():
     ])
     return text, kb
 
+async def send_agent_dashboard(message_or_callback):
+    text, kb = build_agent_dashboard()
+    if isinstance(message_or_callback, Message):
+        try:
+            await message_or_callback.answer(text, reply_markup=kb, parse_mode="Markdown")
+        except Exception:
+            clean_text = text.replace("*", "").replace("_", "").replace("`", "")
+            await message_or_callback.answer(clean_text, reply_markup=kb, parse_mode=None)
+    elif isinstance(message_or_callback, CallbackQuery):
+        try:
+            await message_or_callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        except Exception:
+            clean_text = text.replace("*", "").replace("_", "").replace("`", "")
+            try:
+                await message_or_callback.message.edit_text(clean_text, reply_markup=kb, parse_mode=None)
+            except Exception:
+                pass
+
 @router.message(Command("agent"))
 @router.message(F.text == "🤖 AI Kotib (Userbot)")
 async def handle_agent_command(message: Message):
-    text, kb = build_agent_dashboard()
-    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    args = message.text.split(maxsplit=2) if message.text else []
+
+    # 1. /agent on
+    if len(args) > 1 and args[1].lower() == "on":
+        db.set_agent_enabled(True)
+        await message.reply("🟢 **AI Agent (Auto-Responder) yoqildi!**\nShaxsiy lichkangizga kelgan xabarlarga AI sizning nomingizdan javob qaytaradi.", parse_mode="Markdown")
+        return
+
+    # 2. /agent off
+    if len(args) > 1 and args[1].lower() == "off":
+        db.set_agent_enabled(False)
+        await message.reply("🔴 **AI Agent o'chirildi!**\nShaxsiy xabarlarga avtomatik javob berilmaydi.", parse_mode="Markdown")
+        return
+
+    # 3. /agent mode as_me | assistant
+    if len(args) > 1 and args[1].lower() == "mode":
+        if len(args) < 3:
+            current_mode = db.get_agent_mode()
+            mode_desc = "👤 Sizning nomingizdan" if current_mode == "as_me" else "🤖 AI Kotib sifatida"
+            await message.reply(f"🎭 **Hozirgi uslub:** {mode_desc}\n\nO'zgartirish: `/agent mode as_me` yoki `/agent mode assistant`", parse_mode="Markdown")
+            return
+        new_mode = args[2].lower()
+        if new_mode in ["as_me", "me", "men"]:
+            db.set_agent_mode("as_me")
+            await message.reply("✅ **Uslub:** 👤 Sizning nomingizdan!", parse_mode="Markdown")
+        elif new_mode in ["assistant", "kotib", "bot"]:
+            db.set_agent_mode("assistant")
+            await message.reply("✅ **Uslub:** 🤖 AI Kotib sifatida!", parse_mode="Markdown")
+        else:
+            await message.reply("Tanlang: `/agent mode as_me` yoki `/agent mode assistant`", parse_mode="Markdown")
+        return
+
+    # 4. /agent prompt <matn>
+    if len(args) > 1 and args[1].lower() == "prompt":
+        if len(args) < 3:
+            cur = db.get_agent_prompt()
+            await message.reply(f"📝 **Hozirgi ko'rsatma:**\n_{cur}_\n\nO'zgartirish: `/agent prompt <yangi_matn>`", parse_mode="Markdown")
+            return
+        db.set_agent_prompt(args[2].strip())
+        await message.reply("✅ **AI Agent ko'rsatmasi yangilandi!**", parse_mode="Markdown")
+        return
+
+    # 5. /agent myinfo <matn>
+    if len(args) > 1 and args[1].lower() == "myinfo":
+        if len(args) < 3:
+            info = db.get_owner_info()
+            await message.reply(f"ℹ️ **Siz haqingizda:**\n_{info}_\n\nO'zgartirish: `/agent myinfo <matn>`", parse_mode="Markdown")
+            return
+        db.set_owner_info(args[2].strip())
+        await message.reply("✅ **Shaxsiy ma'lumotlaringiz yangilandi!**", parse_mode="Markdown")
+        return
+
+    # 6. /agent ignore <id> yoki block <id>
+    if len(args) > 1 and args[1].lower() in ["ignore", "block"]:
+        if len(args) < 3 or not args[2].lstrip("-").isdigit():
+            await message.reply("Format: `/agent ignore <user_id>`", parse_mode="Markdown")
+            return
+        uid = int(args[2])
+        db.add_to_blacklist(uid)
+        await message.reply(f"🚫 `{uid}` qora ro'yxatga kiritildi.", parse_mode="Markdown")
+        return
+
+    # 7. /agent unignore <id> yoki unblock <id>
+    if len(args) > 1 and args[1].lower() in ["unignore", "unblock"]:
+        if len(args) < 3 or not args[2].lstrip("-").isdigit():
+            await message.reply("Format: `/agent unignore <user_id>`", parse_mode="Markdown")
+            return
+        uid = int(args[2])
+        db.remove_from_blacklist(uid)
+        await message.reply(f"✅ `{uid}` qora ro'yxatdan chiqarildi.", parse_mode="Markdown")
+        return
+
+    # 8. Asosiy panelni chiqarish
+    await send_agent_dashboard(message)
 
 @router.callback_query(F.data.startswith("agent_"))
 async def handle_agent_callback(callback: CallbackQuery):
@@ -565,11 +678,7 @@ async def handle_agent_callback(callback: CallbackQuery):
         new_state = not db.is_agent_enabled()
         db.set_agent_enabled(new_state)
         await callback.answer(f"AI Agent {'yoqildi' if new_state else 'o‘chirildi'}!")
-        text, kb = build_agent_dashboard()
-        try:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-        except Exception:
-            pass
+        await send_agent_dashboard(callback)
 
     elif data == "agent_toggle_mode":
         current = db.get_agent_mode()
@@ -577,21 +686,13 @@ async def handle_agent_callback(callback: CallbackQuery):
         db.set_agent_mode(new_mode)
         mode_desc = "Sizning nomingizdan" if new_mode == "as_me" else "AI Kotib sifatida"
         await callback.answer(f"Uslub o'zgardi: {mode_desc}!")
-        text, kb = build_agent_dashboard()
-        try:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-        except Exception:
-            pass
+        await send_agent_dashboard(callback)
 
     elif data == "agent_toggle_filter":
         new_state = not db.is_smart_filter_enabled()
         db.set_smart_filter(new_state)
         await callback.answer(f"Aqlli filtr {'yoqildi' if new_state else 'o‘chirildi'}!")
-        text, kb = build_agent_dashboard()
-        try:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-        except Exception:
-            pass
+        await send_agent_dashboard(callback)
 
     elif data.startswith("agent_block_"):
         uid = int(data.split("_")[2])
