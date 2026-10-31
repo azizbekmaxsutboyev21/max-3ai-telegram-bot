@@ -27,12 +27,15 @@ def get_gemini_api_keys() -> list[str]:
     return keys
 
 def get_gemini_model() -> str:
-    return os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+    m = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    if m in ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]:
+        m = "gemini-2.5-flash"
+    return m or "gemini-2.5-flash"
 
 def get_gemini_fallback_models() -> list[str]:
     """Asosiy model 503 yoki limitga tushganda avtomatik o'tish uchun zaxira modellar"""
     primary = get_gemini_model()
-    defaults = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash"]
+    defaults = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.8-flash"]
     models = [primary]
     for m in defaults:
         if m not in models:

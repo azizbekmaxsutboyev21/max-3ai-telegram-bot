@@ -33,6 +33,22 @@ async def health_check(request):
     """Render.com yoki boshqa serverlar uchun salomatlik tekshiruvi (Health Check)"""
     return web.Response(text="Bot is running! 🤖", status=200)
 
+async def keep_alive_ping():
+    """Render.com bepul tarifida 15 daqiqalik uxlab qolishni (Cold Start / Spin down) oldini olish"""
+    render_url = os.getenv("RENDER_EXTERNAL_URL", "")
+    if not render_url:
+        return
+    import aiohttp
+    logger.info(f"Render keep-alive faollashtirildi: {render_url}")
+    while True:
+        try:
+            await asyncio.sleep(600)  # Har 10 daqiqada o'zini-o'zi uyg'otib turadi
+            async with aiohttp.ClientSession() as session:
+                async with session.get(render_url) as resp:
+                    pass
+        except Exception:
+            pass
+
 async def start_web_server():
     """Render.com Free Web Service uchun portni tinglash"""
     port = int(os.getenv("PORT", 8080))
@@ -44,6 +60,7 @@ async def start_web_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
     logger.info(f"Render health-check server ishga tushdi: port {port}")
+    asyncio.create_task(keep_alive_ping())
 
 async def set_bot_commands(bot: Bot):
     """Telegram menyusida chiqadigan buyruqlar ro'yxatini sozlash"""

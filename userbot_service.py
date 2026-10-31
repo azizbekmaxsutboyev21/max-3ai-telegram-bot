@@ -46,6 +46,46 @@ class UserbotService:
         # Bot xabarnomalari ID si orqali kim yozganini topish xaritasi
         self.notification_map: Dict[int, int] = {}
 
+        # Kontaktlar va dialoglarni keshda saqlash (qidiruv tezligi < 1ms)
+        self._cached_contacts: Optional[List[Any]] = None
+        self._contacts_cache_time: float = 0
+        self._cached_dialogs: Optional[List[Any]] = None
+        self._dialogs_cache_time: float = 0
+
+    async def get_cached_contacts(self, force_refresh: bool = False) -> List[Any]:
+        """Kontaktlarni xotirada keshlab tezkor qaytarish"""
+        now = time.time()
+        if not force_refresh and self._cached_contacts is not None and (now - self._contacts_cache_time < 300):
+            return self._cached_contacts
+        if not self.client or not self.is_running:
+            return self._cached_contacts or []
+        try:
+            res = await self.client(GetContactsRequest(hash=0))
+            self._cached_contacts = res.users
+            self._contacts_cache_time = now
+            return self._cached_contacts
+        except Exception as e:
+            logger.warning(f"Kontaktlarni keshga yuklashda xatolik: {e}")
+            return self._cached_contacts or []
+
+    async def get_cached_dialogs(self, limit: int = 120, force_refresh: bool = False) -> List[Any]:
+        """Dialoglarni xotirada keshlab tezkor qaytarish"""
+        now = time.time()
+        if not force_refresh and self._cached_dialogs is not None and (now - self._dialogs_cache_time < 180):
+            return self._cached_dialogs
+        if not self.client or not self.is_running:
+            return self._cached_dialogs or []
+        try:
+            dialogs = []
+            async for d in self.client.iter_dialogs(limit=limit):
+                dialogs.append(d)
+            self._cached_dialogs = dialogs
+            self._dialogs_cache_time = now
+            return self._cached_dialogs
+        except Exception as e:
+            logger.warning(f"Dialoglarni keshga yuklashda xatolik: {e}")
+            return self._cached_dialogs or []
+
     def get_sender_for_notification(self, bot_msg_id: int) -> Optional[int]:
         return self.notification_map.get(bot_msg_id)
 
@@ -85,6 +125,9 @@ class UserbotService:
             logger.info(f"✅ Userbot AI Agent ulandi: {self.me_name} (@{self.me_username} / ID: {self.me_id})")
 
             self._register_handlers()
+            # Keshni fonda oldindan yuklash (warm-up)
+            asyncio.create_task(self.get_cached_contacts(force_refresh=True))
+            asyncio.create_task(self.get_cached_dialogs(limit=100, force_refresh=True))
             return True
 
         except Exception as e:
@@ -266,7 +309,8 @@ class UserbotService:
 
         result = []
         try:
-            async for dialog in self.client.iter_dialogs(limit=limit):
+            cached = await self.get_cached_dialogs(limit=max(limit, 50))
+            for dialog in cached[:limit]:
                 entity = dialog.entity
                 d_type = "user"
                 username = getattr(entity, "username", None) or ""
@@ -385,22 +429,17 @@ class UserbotService:
                 pass
 
             # B) Dialoglar orasidan qidirish (ID bo'yicha)
-            try:
-                async for dialog in self.client.iter_dialogs(limit=150):
-                    if dialog.id == target_id or getattr(dialog.entity, 'id', None) == target_id:
-                        if self.can_write_to_entity(dialog.entity):
-                            return dialog.entity
-            except Exception:
-                pass
+            dialogs = await self.get_cached_dialogs()
+            for dialog in dialogs:
+                if dialog.id == target_id or getattr(dialog.entity, 'id', None) == target_id:
+                    if self.can_write_to_entity(dialog.entity):
+                        return dialog.entity
 
             # C) Kontaktlar ro'yxatidan qidirish (ID bo'yicha)
-            try:
-                contacts = await self.client(GetContactsRequest(hash=0))
-                for u in contacts.users:
-                    if u.id == target_id:
-                        return u
-            except Exception:
-                pass
+            contacts = await self.get_cached_contacts()
+            for u in contacts:
+                if u.id == target_id:
+                    return u
 
             # D) PeerUser orqali get_entity
             try:
@@ -437,77 +476,71 @@ class UserbotService:
                 clean_name = clean_name[:-len(suffix)]
                 break
 
-        # A) BIRINCHI NAVBATDA: Shaxsiy kontaktlar ro'yxati (GetContactsRequest)
-        try:
-            contacts = await self.client(GetContactsRequest(hash=0))
-            # 1. Exact match (to'liq mos)
-            for u in contacts.users:
-                first = (u.first_name or "").lower()
-                last = (u.last_name or "").lower()
-                full = f"{first} {last}".strip()
-                uname = (u.username or "").lower()
-                if clean_name in [first, last, full, uname] or query_lower in [first, last, full, uname]:
-                    return u
+        # A) BIRINCHI NAVBATDA: Shaxsiy kontaktlar ro'yxati (Keshdan)
+        contacts = await self.get_cached_contacts()
+        # 1. Exact match (to'liq mos)
+        for u in contacts:
+            first = (u.first_name or "").lower()
+            last = (u.last_name or "").lower()
+            full = f"{first} {last}".strip()
+            uname = (u.username or "").lower()
+            if clean_name in [first, last, full, uname] or query_lower in [first, last, full, uname]:
+                return u
 
-            # 2. Substring match
-            for u in contacts.users:
-                first = (u.first_name or "").lower()
-                last = (u.last_name or "").lower()
-                full = f"{first} {last}".strip()
-                uname = (u.username or "").lower()
-                if (clean_name and (clean_name in first or clean_name in full or clean_name in uname)) or \
-                   (query_lower in first or query_lower in full or query_lower in uname):
-                    return u
-        except Exception as e:
-            logger.warning(f"Kontaktlardan qidirishda xatolik: {e}")
+        # 2. Substring match
+        for u in contacts:
+            first = (u.first_name or "").lower()
+            last = (u.last_name or "").lower()
+            full = f"{first} {last}".strip()
+            uname = (u.username or "").lower()
+            if (clean_name and (clean_name in first or clean_name in full or clean_name in uname)) or \
+               (query_lower in first or query_lower in full or query_lower in uname):
+                return u
 
-        # B) IKKINCHI NAVBATDA: Dialoglar (chatlar) ro'yxati
+        # B) IKKINCHI NAVBATDA: Dialoglar (chatlar) ro'yxati (Keshdan)
         user_exact = None
         user_partial = None
         group_exact = None
         group_partial = None
         channel_admin = None
 
-        try:
-            async for dialog in self.client.iter_dialogs(limit=150):
-                ent = dialog.entity
-                if not self.can_write_to_entity(ent):
-                    continue
+        dialogs = await self.get_cached_dialogs()
+        for dialog in dialogs:
+            ent = dialog.entity
+            if not self.can_write_to_entity(ent):
+                continue
 
-                d_name = dialog.name.lower() if dialog.name else ""
-                d_uname = (getattr(ent, "username", None) or "").lower()
+            d_name = dialog.name.lower() if dialog.name else ""
+            d_uname = (getattr(ent, "username", None) or "").lower()
 
-                is_exact = (clean_name in [d_name, d_uname] or query_lower in [d_name, d_uname])
-                is_partial = (clean_name and (clean_name in d_name or clean_name in d_uname)) or \
-                             (query_lower in d_name or query_lower in d_uname)
+            is_exact = (clean_name in [d_name, d_uname] or query_lower in [d_name, d_uname])
+            is_partial = (clean_name and (clean_name in d_name or clean_name in d_uname)) or \
+                         (query_lower in d_name or query_lower in d_uname)
 
-                if dialog.is_user:
-                    if is_exact and not user_exact:
-                        user_exact = ent
-                    elif is_partial and not user_partial:
-                        user_partial = ent
-                elif dialog.is_group:
-                    if is_exact and not group_exact:
-                        group_exact = ent
-                    elif is_partial and not group_partial:
-                        group_partial = ent
-                elif dialog.is_channel and getattr(ent, "broadcast", False):
-                    if (is_exact or is_partial) and not channel_admin:
-                        channel_admin = ent
+            if dialog.is_user:
+                if is_exact and not user_exact:
+                    user_exact = ent
+                elif is_partial and not user_partial:
+                    user_partial = ent
+            elif dialog.is_group:
+                if is_exact and not group_exact:
+                    group_exact = ent
+                elif is_partial and not group_partial:
+                    group_partial = ent
+            elif dialog.is_channel and getattr(ent, "broadcast", False):
+                if (is_exact or is_partial) and not channel_admin:
+                    channel_admin = ent
 
-            if user_exact:
-                return user_exact
-            if user_partial:
-                return user_partial
-            if group_exact:
-                return group_exact
-            if group_partial:
-                return group_partial
-            if channel_admin:
-                return channel_admin
-
-        except Exception as e:
-            logger.error(f"Dialoglardan qidirishda xatolik: {e}")
+        if user_exact:
+            return user_exact
+        if user_partial:
+            return user_partial
+        if group_exact:
+            return group_exact
+        if group_partial:
+            return group_partial
+        if channel_admin:
+            return channel_admin
 
         # C) Oxirgi urinish: get_entity
         try:

@@ -94,27 +94,33 @@ class GeminiService:
                 is_503 = "503" in err_msg or "UNAVAILABLE" in err_msg or "high demand" in err_msg.lower()
                 is_quota = "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower()
                 is_invalid = "API_KEY_INVALID" in err_msg or "invalid api key" in err_msg.lower()
+                is_not_found = "404" in err_msg or "not found" in err_msg.lower()
 
                 if is_invalid:
-                    logger.error(f"API kalit yaroqsiz! Kalitni almashtiramiz...")
+                    logger.error("API kalit yaroqsiz! Kalitni almashtiramiz...")
                     self._rotate_key()
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.2)
+                    continue
+
+                if is_not_found:
+                    logger.warning(f"Model '{model_name}' topilmadi (404). Zaxira modelga o'tamiz...")
+                    self._rotate_model()
                     continue
 
                 if is_quota:
                     self._rotate_key()
                     if len(self.api_keys) <= 1:
                         self._rotate_model()
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.4)
                     continue
 
                 if is_503:
                     self._rotate_model()
-                    delay = 1.0 * attempt
+                    delay = 0.5 * attempt
                     await asyncio.sleep(delay)
                     continue
 
-                await asyncio.sleep(1.0)
+                await asyncio.sleep(0.4)
 
         logger.error(f"Gemini {operation_name} barcha urinishlardan so'ng ishlamadi. Oxirgi xato: {last_error}")
         if "503" in last_error or "UNAVAILABLE" in last_error:
