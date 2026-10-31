@@ -363,10 +363,11 @@ def build_admin_main_kb():
             InlineKeyboardButton(text="🤖 Boshqa botlar", callback_data="admin_botcall_help")
         ],
         [
-            InlineKeyboardButton(text="📢 E'lon tarqatish", callback_data="admin_broadcast_help"),
-            InlineKeyboardButton(text="📊 To'liq statistika", callback_data="admin_stats")
+            InlineKeyboardButton(text="✉️ Chatlarga xabar yozish", callback_data="admin_sendmsg_help"),
+            InlineKeyboardButton(text="📢 E'lon tarqatish", callback_data="admin_broadcast_help")
         ],
         [
+            InlineKeyboardButton(text="📊 To'liq statistika", callback_data="admin_stats"),
             InlineKeyboardButton(text="🔄 Yangilash", callback_data="admin_main")
         ]
     ])
@@ -491,6 +492,27 @@ async def handle_admin_callbacks(callback: CallbackQuery):
             "📢 **E'lon tarqatish (Broadcast):**\n\n"
             "Bot barcha a'zolari va ulangan guruhlariga e'lon yuborish uchun quyidagi buyruqdan foydalaning:\n\n"
             "`/broadcast <xabar matni>`"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Asosiy Menyu", callback_data="admin_main")]
+        ])
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        await callback.answer()
+
+    elif data == "admin_sendmsg_help":
+        text = (
+            "✉️ **Chatlarga xabar yozish va Telegram Premium imkoniyatlari:**\n\n"
+            "Siz botga shunchaki tabiiy tilda aytishingiz mumkin:\n"
+            "• *\"Aliga 'Bugun 17:00 da uchrashamiz' deb yoz\"*\n"
+            "• *\"Daryo kanaliga yangi post chiqar: ...\"*\n"
+            "• *\"Guruhga xabar tashla: Ertaga majlis bo'ladi\"*\n\n"
+            "Yoki to'g'ridan-to'g'ri maxsus buyruqlardan foydalaning:\n"
+            "• `/sendmsg <chat, @username yoki ism> <matn>` — bitta chatga xabar yozish\n"
+            "• `/multisend <chat1,chat2,...> <matn>` — bir vaqtning o'zida bir nechta chatga tarqatish\n"
+            "• `/react <chat> <msg_id> <emoji>` — istalgan emoji / Premium emoji reaksiyasi\n"
+            "• `/silentmsg <chat> <matn>` — ovozsiz bildirishnoma bilan yuborish\n"
+            "• `/findchat <nom>` — chatlarni ismi bo'yicha topish\n"
+            "• `/read <chat> [soni]` — chatdagi xabarlarni o'qib AI xulosasini olish"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Asosiy Menyu", callback_data="admin_main")]
@@ -892,6 +914,182 @@ async def handle_pin_message(message: Message, bot: Bot):
     except Exception as e:
         await message.reply(f"❌ Xatolik: {e}")
 
+# ----------------- CHATLARGA XABAR YUBORISH VA TELEGRAM AMALLARI -----------------
+
+async def execute_ai_action_if_any(ai_reply: str, message: Message) -> bool:
+    """AI javobidagi maxsus amallarni (Action) bajarish"""
+    import re
+    
+    # 1. SEND_MESSAGE (bitta chatga xabar yuborish)
+    send_match = re.search(r"\[ACTION:SEND_MESSAGE\|TARGET:(.*?)\|TEXT:(.*?)\]", ai_reply, re.DOTALL)
+    if send_match:
+        target = send_match.group(1).strip()
+        text_to_send = send_match.group(2).strip()
+        status_msg = await message.reply(f"⏳ `{target}` ga xabar yuborilmoqda...")
+        res = await userbot.send_to_target(target, text_to_send)
+        if res["success"]:
+            await status_msg.edit_text(
+                f"✅ **Xabar muvaffaqiyatli yuborildi!**\n\n"
+                f"🎯 **Qayerga:** {res['chat_title']}\n"
+                f"💬 **Xabar:** {text_to_send}",
+                parse_mode="Markdown"
+            )
+        else:
+            await status_msg.edit_text(f"❌ Xabar yuborishda xatolik: {res['error']}", parse_mode="Markdown")
+        return True
+
+    # 2. SEND_MULTIPLE (bir nechta chatlarga xabar yuborish)
+    multi_match = re.search(r"\[ACTION:SEND_MULTIPLE\|TARGETS:(.*?)\|TEXT:(.*?)\]", ai_reply, re.DOTALL)
+    if multi_match:
+        targets = [t.strip() for t in multi_match.group(1).split(",") if t.strip()]
+        text_to_send = multi_match.group(2).strip()
+        status_msg = await message.reply(f"⏳ {len(targets)} ta chatga xabar yuborilmoqda...")
+        res = await userbot.send_to_multiple_targets(targets, text_to_send)
+        succ = "\n".join([f"• ✅ {c}" for c in res["success"]]) if res["success"] else "Hech biri"
+        fail = "\n".join([f"• ❌ {c}" for c in res["failed"]]) if res["failed"] else "Yo'q"
+        await status_msg.edit_text(
+            f"📢 **Xabar bir nechta chatga yuborildi:**\n\n"
+            f"**Muvaffaqiyatli:**\n{succ}\n\n"
+            f"**Yetib bormadi:**\n{fail}\n\n"
+            f"💬 **Matn:** {text_to_send}",
+            parse_mode="Markdown"
+        )
+        return True
+
+    # 3. REACT (xabarga reaksiya qoldirish)
+    react_match = re.search(r"\[ACTION:REACT\|TARGET:(.*?)\|MSG_ID:(\d+)\|EMOJI:(.*?)\]", ai_reply)
+    if react_match:
+        target = react_match.group(1).strip()
+        msg_id = int(react_match.group(2).strip())
+        emoji = react_match.group(3).strip()
+        res = await userbot.react_to_message(target, msg_id, emoji)
+        if res["success"]:
+            await message.reply(f"✨ `{target}` dagi #{msg_id} xabarga {emoji} reaksiyasi qoldirildi!")
+        else:
+            await message.reply(f"❌ Reaksiya bildirishda xatolik: {res['error']}")
+        return True
+
+    return False
+
+@router.message(Command("sendmsg"))
+@router.message(Command("msg"))
+async def handle_sendmsg_command(message: Message):
+    """Shaxsiy akkauntdan istalgan chat, shaxs yoki kanalga xabar yuborish"""
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.reply(
+            "Format: `/sendmsg <chat_id, @username yoki ism> <xabar matni>`\n\n"
+            "Misollar:\n"
+            "• `/sendmsg @ali Salom, qalaysan?`\n"
+            "• `/sendmsg -100123456789 Yangi post!`\n"
+            "• `/sendmsg Doston Akam Bugun uchrashamiz`",
+            parse_mode="Markdown"
+        )
+        return
+
+    target = parts[1].strip()
+    text = parts[2].strip()
+
+    status_msg = await message.reply(f"⏳ `{target}` ga xabar yuborilmoqda...")
+    res = await userbot.send_to_target(target, text)
+    if res["success"]:
+        await status_msg.edit_text(
+            f"✅ **Xabar muvaffaqiyatli yuborildi!**\n\n"
+            f"🎯 **Qayerga:** {res['chat_title']}\n"
+            f"💬 **Xabar:** {text}",
+            parse_mode="Markdown"
+        )
+    else:
+        await status_msg.edit_text(f"❌ Xatolik yuz berdi: {res['error']}", parse_mode="Markdown")
+
+@router.message(Command("multisend"))
+async def handle_multisend_command(message: Message):
+    """Bir nechta chatlarga bir vaqtda xabar tarqatish"""
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.reply(
+            "Format: `/multisend <chat1,chat2,...> <xabar matni>`\n\n"
+            "Misol: `/multisend @daryo,@mychannel,-100123456 Hammaga xayrli kun!`",
+            parse_mode="Markdown"
+        )
+        return
+
+    targets = [t.strip() for t in parts[1].split(",") if t.strip()]
+    text = parts[2].strip()
+
+    status_msg = await message.reply(f"⏳ {len(targets)} ta chatga xabar tarqatilmoqda...")
+    res = await userbot.send_to_multiple_targets(targets, text)
+    
+    succ_lines = "\n".join([f"• ✅ {c}" for c in res["success"]]) if res["success"] else "Hech biri"
+    fail_lines = "\n".join([f"• ❌ {c}" for c in res["failed"]]) if res["failed"] else "Yo'q"
+
+    await status_msg.edit_text(
+        f"📢 **Natija:**\n\n"
+        f"**Muvaffaqiyatli ({len(res['success'])} ta):**\n{succ_lines}\n\n"
+        f"**Yuborilmadi ({len(res['failed'])} ta):**\n{fail_lines}\n\n"
+        f"💬 **Xabar:** {text}",
+        parse_mode="Markdown"
+    )
+
+@router.message(Command("react"))
+async def handle_react_command(message: Message):
+    """Xabarga reaksiya bildirish (Telegram Premium / Standart emojilar)"""
+    parts = message.text.split(maxsplit=3)
+    if len(parts) < 3:
+        await message.reply(
+            "Format: `/react <chat_id yoki @username> <xabar_id> [emoji]`\n\n"
+            "Misol: `/react @mychannel 125 🔥` (standart: 🔥)",
+            parse_mode="Markdown"
+        )
+        return
+
+    target = parts[1].strip()
+    if not parts[2].isdigit():
+        await message.reply("Xabar ID si faqat raqam bo'lishi kerak!")
+        return
+    msg_id = int(parts[2])
+    emoji = parts[3].strip() if len(parts) > 3 else "🔥"
+
+    res = await userbot.react_to_message(target, msg_id, emoji)
+    if res["success"]:
+        await message.reply(f"✨ `{target}` dagi #{msg_id} xabarga {emoji} reaksiyasi qoldirildi!")
+    else:
+        await message.reply(f"❌ Reaksiya qoldirib bo'lmadi: {res['error']}")
+
+@router.message(Command("silentmsg"))
+async def handle_silentmsg_command(message: Message):
+    """Ovoz bildirishnomasisiz (Silent) xabar yuborish"""
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.reply("Format: `/silentmsg <chat> <matn>`", parse_mode="Markdown")
+        return
+    target, text = parts[1].strip(), parts[2].strip()
+    res = await userbot.send_to_target(target, text, silent=True)
+    if res["success"]:
+        await message.reply(f"🔕 **Ovozsiz (Silent) xabar yuborildi:** `{res['chat_title']}`", parse_mode="Markdown")
+    else:
+        await message.reply(f"❌ Xatolik: {res['error']}")
+
+@router.message(Command("findchat"))
+async def handle_findchat_command(message: Message):
+    """Chatlarni nomi bo'yicha qidirish"""
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply("Format: `/findchat <qidiruv_so'zi>`", parse_mode="Markdown")
+        return
+    q = parts[1].strip().lower()
+    dialogs = await userbot.get_dialogs_list(limit=80)
+    matched = [d for d in dialogs if q in d["title"].lower() or q in d["username"].lower()]
+    if not matched:
+        await message.reply(f"'{q}' bo'yicha hech qanday chat topilmadi.")
+        return
+    lines = [f"🔍 **'{q}' bo'yicha topilgan chatlar:**\n"]
+    for d in matched[:10]:
+        icon = "📢" if d["type"] == "channel" else ("👥" if d["type"] == "group" else "👤")
+        uname = f"(@{d['username']})" if d.get("username") else ""
+        lines.append(f"{icon} **{d['title']}** {uname}\n  ID: `{d['id']}`")
+    await safe_reply(message, "\n".join(lines))
+
 # ----------------- GURUHLARDA ISHLASH VA /ai BUYRUG'I -----------------
 
 @router.message(Command("ai"))
@@ -970,9 +1168,6 @@ async def handle_text(message: Message, bot: Bot):
             username=message.chat.username
         )
         
-        # Botga to'g'ridan-to'g'ri murojaat qilinganini tekshiramiz:
-        # 1. Bot nomiga Reply qilingan bo'lsa
-        # 2. Xabarda bot username-i bo'lsa (@bot)
         bot_info = await bot.get_me()
         bot_username = f"@{bot_info.username}".lower()
         
@@ -997,4 +1192,8 @@ async def handle_text(message: Message, bot: Bot):
 
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
     ai_reply = await gemini.generate_response(user_id=message.from_user.id, user_message=user_text)
-    await safe_reply(message, ai_reply)
+
+    # 1. AI javobida amaliy topshiriq (Action) bormi?
+    action_handled = await execute_ai_action_if_any(ai_reply, message)
+    if not action_handled:
+        await safe_reply(message, ai_reply)

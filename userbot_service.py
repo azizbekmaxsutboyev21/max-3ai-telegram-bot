@@ -335,16 +335,137 @@ class UserbotService:
             logger.error(f"Bot bilan muloqotda xatolik: {e}")
             return f"Xatolik yuz berdi: {e}"
 
-    async def send_direct_message(self, target_id: Any, text: str) -> bool:
-        """Shaxsiy akkaunt nomidan xabar yuborish"""
+    async def find_entity_by_name_or_username(self, query: Any) -> Optional[Any]:
+        """Foydalanuvchi, guruh yoki kanalni ID, username yoki nomi bo'yicha topish"""
         if not self.is_running or not self.client:
-            return False
+            return None
+
+        # Agar int bo'lsa
+        if isinstance(query, int):
+            try:
+                return await self.client.get_entity(query)
+            except Exception:
+                pass
+
+        query_str = str(query).strip()
+
+        # 1. Agar sonli ID bo'lsa (masalan -100... yoki 123456)
+        if query_str.lstrip("-").isdigit():
+            try:
+                return await self.client.get_entity(int(query_str))
+            except Exception:
+                pass
+
+        # 2. Agar @username yoki havola bo'lsa
+        if query_str.startswith("@") or "t.me/" in query_str:
+            clean_username = query_str.replace("https://t.me/", "").replace("t.me/", "")
+            try:
+                return await self.client.get_entity(clean_username)
+            except Exception:
+                pass
+
+        # 3. Agar ism yoki so'z bo'lsa - dialoglar (chatlar) orasidan qidirish
+        query_lower = query_str.lower()
         try:
-            await self.client.send_message(target_id, text)
-            return True
+            async for dialog in self.client.iter_dialogs(limit=120):
+                d_name = dialog.name.lower() if dialog.name else ""
+                d_uname = (getattr(dialog.entity, "username", None) or "").lower()
+                if query_lower == d_name or query_lower == d_uname:
+                    return dialog.entity
+                if query_lower in d_name or query_lower in d_uname:
+                    return dialog.entity
+        except Exception as e:
+            logger.error(f"Dialoglardan qidirishda xatolik: {e}")
+
+        # 4. Oxirgi urinish: get_entity
+        try:
+            return await self.client.get_entity(query_str)
+        except Exception:
+            return None
+
+    async def send_to_target(
+        self,
+        target: Any,
+        text: str,
+        silent: bool = False,
+        schedule_in_seconds: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Istalgan chat, kanal yoki shaxsga xabar yuborish (Telegram Premium xususiyatlari bilan):
+        - Uzun xabarlar (4096 belgigacha)
+        - Ovoz bildirishnomasisiz (silent) yuborish
+        - Rejalashtirilgan (schedule) vaqtda yuborish
+        """
+        if not self.is_running or not self.client:
+            return {"success": False, "error": "Userbot ulanmagan. Iltimos, .env da sessiyani tekshiring."}
+
+        try:
+            entity = await self.find_entity_by_name_or_username(target)
+            if not entity:
+                return {"success": False, "error": f"'{target}' nomli chat, foydalanuvchi yoki kanal topilmadi."}
+
+            schedule = None
+            if schedule_in_seconds and schedule_in_seconds > 0:
+                import datetime
+                schedule = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=schedule_in_seconds)
+
+            sent = await self.client.send_message(
+                entity,
+                text,
+                silent=silent,
+                schedule=schedule
+            )
+
+            title = getattr(entity, "title", None)
+            if not title:
+                title = f"{getattr(entity, 'first_name', '')} {getattr(entity, 'last_name', '')}".strip()
+            if not title:
+                title = getattr(entity, "username", None) or str(target)
+
+            return {
+                "success": True,
+                "chat_title": title,
+                "chat_id": getattr(entity, "id", None),
+                "message_id": sent.id
+            }
         except Exception as e:
             logger.error(f"Xabar yuborishda xatolik: {e}")
-            return False
+            return {"success": False, "error": str(e)}
+
+    async def send_to_multiple_targets(self, targets: List[str], text: str, silent: bool = False) -> Dict[str, Any]:
+        """Bir nechta chatlarga bir vaqtda xabar tarqatish"""
+        results = {"success": [], "failed": []}
+        for t in targets:
+            t_clean = t.strip()
+            if not t_clean:
+                continue
+            res = await self.send_to_target(t_clean, text, silent=silent)
+            if res["success"]:
+                results["success"].append(f"{res['chat_title']}")
+            else:
+                results["failed"].append(f"{t_clean}: {res['error']}")
+        return results
+
+    async def react_to_message(self, target: Any, message_id: int, emoji: str = "🔥") -> Dict[str, Any]:
+        """Xabarga reaksiya bildirish (Telegram Premium / Standart emojilar)"""
+        if not self.is_running or not self.client:
+            return {"success": False, "error": "Userbot ulanmagan."}
+
+        try:
+            entity = await self.find_entity_by_name_or_username(target)
+            if not entity:
+                return {"success": False, "error": f"'{target}' topilmadi."}
+
+            await self.client.send_reaction(entity, message_id, emoji)
+            return {"success": True, "chat": str(target), "emoji": emoji}
+        except Exception as e:
+            logger.error(f"Reaksiya bildirishda xatolik: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def send_direct_message(self, target_id: Any, text: str) -> bool:
+        """Eski kod bilan moslik uchun"""
+        res = await self.send_to_target(target_id, text)
+        return res["success"]
 
     async def join_chat(self, link_or_username: str) -> str:
         """Guruh yoki kanalga a'zo bo'lish"""

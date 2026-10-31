@@ -49,11 +49,12 @@ async def set_bot_commands(bot: Bot):
     """Telegram menyusida chiqadigan buyruqlar ro'yxatini sozlash"""
     commands = [
         BotCommand(command="start", description="Botni ishga tushirish"),
+        BotCommand(command="sendmsg", description="Chatga xabar yuborish"),
         BotCommand(command="admin", description="Boshqaruv paneli"),
         BotCommand(command="agent", description="AI Kotib (Userbot) paneli"),
+        BotCommand(command="mychats", description="Chatlarim va kanallarim"),
         BotCommand(command="adapt", description="Menga moslashish sozlamalari"),
         BotCommand(command="blacklist", description="Qora ro'yxat"),
-        BotCommand(command="mychats", description="Chatlarim va kanallarim"),
         BotCommand(command="ai", description="AI ga savol berish"),
         BotCommand(command="reset", description="Suhbat tarixini tozalash"),
         BotCommand(command="help", description="Qo'llanma va yordam"),
