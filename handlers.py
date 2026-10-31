@@ -376,13 +376,15 @@ def build_admin_main_kb():
 async def handle_admin(message: Message):
     stats = db.get_stats()
     status = userbot.get_status()
-    ub_conn = "🟢 Faol" if status["connected"] else "🔴 Ulanmagan"
+    ub_conn = "🟢 Faol" if status.get("connected") else "🔴 Ulanmagan"
+    agent_enabled_label = "🟢 Yoqilgan" if status.get("agent_enabled") else "🔴 O'chirilgan"
+    mode_label = "👤 Sizning nomingizdan" if db.get_agent_mode() == "as_me" else "🤖 AI Kotib"
 
     text = (
         "👑 **Boshqaruv Paneli**\n\n"
         f"📱 **Telegram Userbot:** {ub_conn}\n"
-        f"🤖 **AI Kotib (Auto-reply):** {'🟢 Yoqilgan' if status['agent_enabled'] else '🔴 O\'chirilgan'}\n"
-        f"🎭 **Uslub:** {'👤 Sizning nomingizdan' if db.get_agent_mode() == 'as_me' else '🤖 AI Kotib'}\n"
+        f"🤖 **AI Kotib (Auto-reply):** {agent_enabled_label}\n"
+        f"🎭 **Uslub:** {mode_label}\n"
         f"👥 **Bot foydalanuvchilari:** {stats['total_users']} ta\n"
         f"📢 **Guruh va kanallar:** {stats['total_chats']} ta\n"
         f"🚫 **Bloklanganlar:** {len(db.get_agent_blacklist())} ta\n\n"
@@ -397,12 +399,14 @@ async def handle_admin_callbacks(callback: CallbackQuery):
     if data == "admin_main":
         stats = db.get_stats()
         status = userbot.get_status()
-        ub_conn = "🟢 Faol" if status["connected"] else "🔴 Ulanmagan"
+        ub_conn = "🟢 Faol" if status.get("connected") else "🔴 Ulanmagan"
+        agent_enabled_label = "🟢 Yoqilgan" if status.get("agent_enabled") else "🔴 O'chirilgan"
+        mode_label = "👤 Sizning nomingizdan" if db.get_agent_mode() == "as_me" else "🤖 AI Kotib"
         text = (
             "👑 **Boshqaruv Paneli**\n\n"
             f"📱 **Telegram Userbot:** {ub_conn}\n"
-            f"🤖 **AI Kotib (Auto-reply):** {'🟢 Yoqilgan' if status['agent_enabled'] else '🔴 O\'chirilgan'}\n"
-            f"🎭 **Uslub:** {'👤 Sizning nomingizdan' if db.get_agent_mode() == 'as_me' else '🤖 AI Kotib'}\n"
+            f"🤖 **AI Kotib (Auto-reply):** {agent_enabled_label}\n"
+            f"🎭 **Uslub:** {mode_label}\n"
             f"👥 **Bot foydalanuvchilari:** {stats['total_users']} ta\n"
             f"📢 **Guruh va kanallar:** {stats['total_chats']} ta\n"
             f"🚫 **Bloklanganlar:** {len(db.get_agent_blacklist())} ta"
