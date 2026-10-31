@@ -5,9 +5,11 @@ import re
 from typing import Optional, Dict, List, Any
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.tl.types import User, Channel, Chat
+from telethon.tl.types import User, Channel, Chat, PeerUser, PeerChat, PeerChannel, InputPhoneContact
 from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
 from telethon.tl.functions.messages import ImportChatInviteRequest
+from telethon.tl.functions.contacts import GetContactsRequest, ImportContactsRequest
+from telethon.errors import ChatWriteForbiddenError, UserBannedInChannelError
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import config
@@ -335,53 +337,187 @@ class UserbotService:
             logger.error(f"Bot bilan muloqotda xatolik: {e}")
             return f"Xatolik yuz berdi: {e}"
 
+    def can_write_to_entity(self, entity: Any) -> bool:
+        """Ushbu chat/kanalga xabar yozish huquqimiz bormi?"""
+        if isinstance(entity, User):
+            return True
+        if isinstance(entity, Chat):
+            return not getattr(entity, 'kicked', False) and not getattr(entity, 'left', False)
+        if isinstance(entity, Channel):
+            if getattr(entity, 'broadcast', False):
+                if getattr(entity, 'creator', False):
+                    return True
+                admin_rights = getattr(entity, 'admin_rights', None)
+                if admin_rights and getattr(admin_rights, 'post_messages', False):
+                    return True
+                return False
+            else:
+                if getattr(entity, 'left', False) or getattr(entity, 'kicked', False):
+                    return False
+                banned_rights = getattr(entity, 'banned_rights', None)
+                if banned_rights and getattr(banned_rights, 'send_messages', False):
+                    return False
+                default_banned = getattr(entity, 'default_banned_rights', None)
+                if default_banned and getattr(default_banned, 'send_messages', False):
+                    if not getattr(entity, 'creator', False) and not getattr(entity, 'admin_rights', None):
+                        return False
+                return True
+        return True
+
     async def find_entity_by_name_or_username(self, query: Any) -> Optional[Any]:
-        """Foydalanuvchi, guruh yoki kanalni ID, username yoki nomi bo'yicha topish"""
+        """Foydalanuvchi, guruh yoki kanalni ID, username, telefon yoki nomi bo'yicha aniq topish"""
         if not self.is_running or not self.client:
             return None
 
-        # Agar int bo'lsa
-        if isinstance(query, int):
-            try:
-                return await self.client.get_entity(query)
-            except Exception:
-                pass
-
         query_str = str(query).strip()
+        if not query_str:
+            return None
 
-        # 1. Agar sonli ID bo'lsa (masalan -100... yoki 123456)
+        # 1. Agar sonli ID bo'lsa (masalan 8927070806 yoki -100123456789)
         if query_str.lstrip("-").isdigit():
+            target_id = int(query_str)
+            # A) To'g'ridan-to'g'ri get_entity
             try:
-                return await self.client.get_entity(int(query_str))
+                ent = await self.client.get_entity(target_id)
+                if ent and self.can_write_to_entity(ent):
+                    return ent
             except Exception:
                 pass
 
-        # 2. Agar @username yoki havola bo'lsa
+            # B) Dialoglar orasidan qidirish (ID bo'yicha)
+            try:
+                async for dialog in self.client.iter_dialogs(limit=150):
+                    if dialog.id == target_id or getattr(dialog.entity, 'id', None) == target_id:
+                        if self.can_write_to_entity(dialog.entity):
+                            return dialog.entity
+            except Exception:
+                pass
+
+            # C) Kontaktlar ro'yxatidan qidirish (ID bo'yicha)
+            try:
+                contacts = await self.client(GetContactsRequest(hash=0))
+                for u in contacts.users:
+                    if u.id == target_id:
+                        return u
+            except Exception:
+                pass
+
+            # D) PeerUser orqali get_entity
+            try:
+                ent = await self.client.get_entity(PeerUser(target_id))
+                if ent and self.can_write_to_entity(ent):
+                    return ent
+            except Exception:
+                pass
+
+        # 2. Agar @username yoki t.me havola bo'lsa
         if query_str.startswith("@") or "t.me/" in query_str:
-            clean_username = query_str.replace("https://t.me/", "").replace("t.me/", "")
+            clean = query_str.replace("https://t.me/", "").replace("t.me/", "").lstrip("@")
             try:
-                return await self.client.get_entity(clean_username)
+                ent = await self.client.get_entity(clean)
+                if ent and self.can_write_to_entity(ent):
+                    return ent
             except Exception:
                 pass
 
-        # 3. Agar ism yoki so'z bo'lsa - dialoglar (chatlar) orasidan qidirish
-        query_lower = query_str.lower()
+        # 3. Agar telefon raqam bo'lsa
+        if query_str.startswith("+") and query_str[1:].isdigit():
+            try:
+                ent = await self.client.get_entity(query_str)
+                if ent and self.can_write_to_entity(ent):
+                    return ent
+            except Exception:
+                pass
+
+        # 4. Ism yoki so'z bo'yicha qidirish (masalan: "Munisaga", "Munisa")
+        query_lower = query_str.lower().strip()
+        clean_name = query_lower
+        for suffix in ["ga", "ka", "qa", "ge", "ni", "ning", "da", "dan"]:
+            if clean_name.endswith(suffix) and len(clean_name) > len(suffix) + 2:
+                clean_name = clean_name[:-len(suffix)]
+                break
+
+        # A) BIRINCHI NAVBATDA: Shaxsiy kontaktlar ro'yxati (GetContactsRequest)
         try:
-            async for dialog in self.client.iter_dialogs(limit=120):
+            contacts = await self.client(GetContactsRequest(hash=0))
+            # 1. Exact match (to'liq mos)
+            for u in contacts.users:
+                first = (u.first_name or "").lower()
+                last = (u.last_name or "").lower()
+                full = f"{first} {last}".strip()
+                uname = (u.username or "").lower()
+                if clean_name in [first, last, full, uname] or query_lower in [first, last, full, uname]:
+                    return u
+
+            # 2. Substring match
+            for u in contacts.users:
+                first = (u.first_name or "").lower()
+                last = (u.last_name or "").lower()
+                full = f"{first} {last}".strip()
+                uname = (u.username or "").lower()
+                if (clean_name and (clean_name in first or clean_name in full or clean_name in uname)) or \
+                   (query_lower in first or query_lower in full or query_lower in uname):
+                    return u
+        except Exception as e:
+            logger.warning(f"Kontaktlardan qidirishda xatolik: {e}")
+
+        # B) IKKINCHI NAVBATDA: Dialoglar (chatlar) ro'yxati
+        user_exact = None
+        user_partial = None
+        group_exact = None
+        group_partial = None
+        channel_admin = None
+
+        try:
+            async for dialog in self.client.iter_dialogs(limit=150):
+                ent = dialog.entity
+                if not self.can_write_to_entity(ent):
+                    continue
+
                 d_name = dialog.name.lower() if dialog.name else ""
-                d_uname = (getattr(dialog.entity, "username", None) or "").lower()
-                if query_lower == d_name or query_lower == d_uname:
-                    return dialog.entity
-                if query_lower in d_name or query_lower in d_uname:
-                    return dialog.entity
+                d_uname = (getattr(ent, "username", None) or "").lower()
+
+                is_exact = (clean_name in [d_name, d_uname] or query_lower in [d_name, d_uname])
+                is_partial = (clean_name and (clean_name in d_name or clean_name in d_uname)) or \
+                             (query_lower in d_name or query_lower in d_uname)
+
+                if dialog.is_user:
+                    if is_exact and not user_exact:
+                        user_exact = ent
+                    elif is_partial and not user_partial:
+                        user_partial = ent
+                elif dialog.is_group:
+                    if is_exact and not group_exact:
+                        group_exact = ent
+                    elif is_partial and not group_partial:
+                        group_partial = ent
+                elif dialog.is_channel and getattr(ent, "broadcast", False):
+                    if (is_exact or is_partial) and not channel_admin:
+                        channel_admin = ent
+
+            if user_exact:
+                return user_exact
+            if user_partial:
+                return user_partial
+            if group_exact:
+                return group_exact
+            if group_partial:
+                return group_partial
+            if channel_admin:
+                return channel_admin
+
         except Exception as e:
             logger.error(f"Dialoglardan qidirishda xatolik: {e}")
 
-        # 4. Oxirgi urinish: get_entity
+        # C) Oxirgi urinish: get_entity
         try:
-            return await self.client.get_entity(query_str)
+            ent = await self.client.get_entity(clean_name if clean_name else query_str)
+            if ent and self.can_write_to_entity(ent):
+                return ent
         except Exception:
-            return None
+            pass
+
+        return None
 
     async def send_to_target(
         self,
@@ -397,12 +533,33 @@ class UserbotService:
         - Rejalashtirilgan (schedule) vaqtda yuborish
         """
         if not self.is_running or not self.client:
-            return {"success": False, "error": "Userbot ulanmagan. Iltimos, .env da sessiyani tekshiring."}
+            return {"success": False, "error": "Userbot ulanmagan. Iltimos, .env da sessiyani tekshiring.", "chat_title": str(target)}
 
         try:
             entity = await self.find_entity_by_name_or_username(target)
             if not entity:
-                return {"success": False, "error": f"'{target}' nomli chat, foydalanuvchi yoki kanal topilmadi."}
+                return {
+                    "success": False,
+                    "error": (
+                        f"'{target}' nomli chat, kontakt yoki kanal topilmadi.\n\n"
+                        "💡 *Maslahat:* Aniqroq topish uchun uning @username ini (masalan: @munisa) "
+                        "yoki Telegram kontaktlaringizdagi to'liq ismini kiriting."
+                    ),
+                    "chat_title": str(target)
+                }
+
+            title = getattr(entity, "title", None)
+            if not title:
+                title = f"{getattr(entity, 'first_name', '')} {getattr(entity, 'last_name', '')}".strip()
+            if not title:
+                title = getattr(entity, "username", None) or str(target)
+
+            if not self.can_write_to_entity(entity):
+                return {
+                    "success": False,
+                    "error": f"'{title}' chatiga yozish huquqi yo'q (bu ommaviy kanal yoki yozish cheklangan guruh).",
+                    "chat_title": title
+                }
 
             schedule = None
             if schedule_in_seconds and schedule_in_seconds > 0:
@@ -416,12 +573,6 @@ class UserbotService:
                 schedule=schedule
             )
 
-            title = getattr(entity, "title", None)
-            if not title:
-                title = f"{getattr(entity, 'first_name', '')} {getattr(entity, 'last_name', '')}".strip()
-            if not title:
-                title = getattr(entity, "username", None) or str(target)
-
             return {
                 "success": True,
                 "chat_title": title,
@@ -430,7 +581,25 @@ class UserbotService:
             }
         except Exception as e:
             logger.error(f"Xabar yuborishda xatolik: {e}")
-            return {"success": False, "error": str(e)}
+            err_str = str(e)
+            target_str = str(target)
+
+            if "can't write in this chat" in err_str.lower() or "chatwriteforbiddenerror" in err_str.lower():
+                user_friendly_err = f"'{target_str}' chatiga yozish huquqi yo'q (bu kanal yoki yozish cheklangan guruh bo'lishi mumkin)."
+            elif "peeruser" in err_str.lower() or "could not find the input entity" in err_str.lower():
+                user_friendly_err = (
+                    f"'{target_str}' identifikatori bo'yicha foydalanuvchi topilmadi. "
+                    "Telegram qoidasiga ko'ra, siz bilan avval yozishmagan shaxsga faqat raqamli ID orqali yozib bo'lmaydi. "
+                    "Iltimos, uning @username ini (masalan @profil) yoki telefon raqamini bering yoki uni kontaktlaringizga qo'shing."
+                )
+            elif "user_is_blocked" in err_str.lower():
+                user_friendly_err = "Foydalanuvchi sizni bloklagan yoki siz uni bloklagansiz."
+            elif "privacy" in err_str.lower():
+                user_friendly_err = "Foydalanuvchi Telegram maxfiylik sozlamalarida begonalardan xabar olishni cheklagan."
+            else:
+                user_friendly_err = err_str
+
+            return {"success": False, "error": user_friendly_err, "chat_title": target_str}
 
     async def send_to_multiple_targets(self, targets: List[str], text: str, silent: bool = False) -> Dict[str, Any]:
         """Bir nechta chatlarga bir vaqtda xabar tarqatish"""

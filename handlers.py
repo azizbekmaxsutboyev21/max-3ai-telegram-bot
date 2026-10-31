@@ -916,6 +916,8 @@ async def handle_pin_message(message: Message, bot: Bot):
 
 # ----------------- CHATLARGA XABAR YUBORISH VA TELEGRAM AMALLARI -----------------
 
+_last_failed_send_action: Dict[int, Dict[str, Any]] = {}
+
 async def execute_ai_action_if_any(ai_reply: str, message: Message) -> bool:
     """AI javobidagi maxsus amallarni (Action) bajarish"""
     import re
@@ -928,6 +930,7 @@ async def execute_ai_action_if_any(ai_reply: str, message: Message) -> bool:
         status_msg = await message.reply(f"⏳ `{target}` ga xabar yuborilmoqda...")
         res = await userbot.send_to_target(target, text_to_send)
         if res["success"]:
+            _last_failed_send_action.pop(message.from_user.id, None)
             await status_msg.edit_text(
                 f"✅ **Xabar muvaffaqiyatli yuborildi!**\n\n"
                 f"🎯 **Qayerga:** {res['chat_title']}\n"
@@ -935,7 +938,16 @@ async def execute_ai_action_if_any(ai_reply: str, message: Message) -> bool:
                 parse_mode="Markdown"
             )
         else:
-            await status_msg.edit_text(f"❌ Xabar yuborishda xatolik: {res['error']}", parse_mode="Markdown")
+            _last_failed_send_action[message.from_user.id] = {
+                "target": target,
+                "text": text_to_send,
+                "time": time.time()
+            }
+            await status_msg.edit_text(
+                f"❌ **Xabar yuborishda xatolik:**\n{res['error']}\n\n"
+                f"💡 *Agar bu shaxsning Telegram ID si yoki @username ini bilsangiz, shunchaki yuboring (masalan: `8927070806` yoki `@username`), bot uni o'zi yetkazadi.*",
+                parse_mode="Markdown"
+            )
         return True
 
     # 2. SEND_MULTIPLE (bir nechta chatlarga xabar yuborish)
@@ -1189,6 +1201,38 @@ async def handle_text(message: Message, bot: Bot):
     if user_text.startswith("/"):
         await message.reply("Noma'lum buyruq. Yordam uchun /help deb yozing.")
         return
+
+    # Agar avvalgi xabar yuborish muvaffaqiyatsiz bo'lgan bo'lsa va foydalanuvchi yangi xabarda ID yoki username kiritgan bo'lsa:
+    last_failed = _last_failed_send_action.get(message.from_user.id)
+    if last_failed and (time.time() - last_failed.get("time", 0) < 300):
+        import re
+        id_match = re.search(r"(\b-?\d{6,14}\b)", user_text)
+        username_match = re.search(r"(@[a-zA-Z0-9_]{4,32})", user_text)
+        new_target = None
+        if id_match:
+            new_target = id_match.group(1)
+        elif username_match:
+            new_target = username_match.group(1)
+
+        if new_target:
+            text_to_retry = last_failed["text"]
+            status_msg = await message.reply(f"⏳ `{new_target}` ga xabar yuborilmoqda...")
+            res = await userbot.send_to_target(new_target, text_to_retry)
+            if res["success"]:
+                _last_failed_send_action.pop(message.from_user.id, None)
+                await status_msg.edit_text(
+                    f"✅ **Xabar muvaffaqiyatli yuborildi!**\n\n"
+                    f"🎯 **Qayerga:** {res['chat_title']}\n"
+                    f"💬 **Xabar:** {text_to_retry}",
+                    parse_mode="Markdown"
+                )
+                return
+            else:
+                await status_msg.edit_text(
+                    f"❌ **Xabar yuborishda xatolik:**\n{res['error']}",
+                    parse_mode="Markdown"
+                )
+                return
 
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
     ai_reply = await gemini.generate_response(user_id=message.from_user.id, user_message=user_text)
