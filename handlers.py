@@ -25,11 +25,12 @@ logger = logging.getLogger(__name__)
 router = Router()
 gemini = GeminiService()
 
-# Asosiy tugmalar (Reply Keyboard)
+# Asosiy klaviatura tugmalari
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💬 Yangi suhbat"), KeyboardButton(text="🎙 Ovozli yordam")],
-        [KeyboardButton(text="ℹ️ Bot haqida"), KeyboardButton(text="💡 Yordam")],
+        [KeyboardButton(text="👑 Admin Panel"), KeyboardButton(text="🤖 AI Kotib (Userbot)")],
+        [KeyboardButton(text="🧠 Menga moslashish"), KeyboardButton(text="🚫 Qora ro'yxat")],
         [KeyboardButton(text="🔒 Qulflash"), KeyboardButton(text="🔑 Kodni o'zgartirish")]
     ],
     resize_keyboard=True
@@ -37,119 +38,74 @@ main_keyboard = ReplyKeyboardMarkup(
 
 class PrivateAuthMiddleware(BaseMiddleware):
     """
-    Faqat bot egasiga ruxsat berish va maxfiy PIN-kod (passcode) bilan
-    avtorizatsiya qilish xavfsizlik middleware-si.
+    Xavfsizlik Middleware-si:
+    - Guruhlar va kanallardagi xabarlarni to'sib qo'ymaydi (u yerda bot erkin ishlaydi).
+    - Shaxsiy (Private) chatda esa har qanday akkaunt o'rnatilgan maxfiy kodni kiritib
+      o'zini tasdiqlashi (admin bo'lishi) mumkin!
     """
     async def __call__(self, handler, event, data):
+        # Guruh yoki kanal bo'lsa - autentifikatsiya talab qilinmaydi
+        chat = getattr(event, "chat", None)
+        if chat and chat.type != "private":
+            return await handler(event, data)
+
         user = getattr(event, "from_user", None)
         if not user:
             return await handler(event, data)
 
-        # 1. Begonalarni to'liq bloklash (Faqat egasi foydalana oladi)
-        if user.id != config.CREATOR_ID:
-            if isinstance(event, Message):
-                await event.answer(
-                    "⛔️ **Kirish taqiqlangan!**\n\n"
-                    "Ushbu bot shaxsiy bot bo'lib, faqat uning egasi uchun mo'ljallangan.",
-                    parse_mode="Markdown"
-                )
-            elif isinstance(event, CallbackQuery):
-                await event.answer("⛔️ Kirish taqiqlangan! Ushbu bot shaxsiy.", show_alert=True)
-            return
+        # Agar foydalanuvchi allaqachon tasdiqlangan bo'lsa
+        if db.is_authenticated(user.id):
+            return await handler(event, data)
 
-        # 2. Bot egasi uchun xavfsizlik tekshiruvi (Kod / Parol)
+        # Tasdiqlanmagan foydalanuvchi shaxsiy chatda kod kiritishi kerak
         if isinstance(event, Message) and event.text:
             text = event.text.strip()
+            current_code = db.get_access_code()
 
-            # Qulflash buyrug'i
-            if text in ["/lock", "🔒 Qulflash"]:
-                db.set_authenticated(user.id, False)
+            # Kod to'g'ri kiritilsa
+            if text == current_code:
+                db.set_authenticated(user.id, True)
                 await event.answer(
-                    "🔒 **Bot muvaffaqiyatli qulflandi!**\n\n"
-                    "Qayta kirish uchun maxfiy kodingizni kiriting:",
-                    reply_markup=ReplyKeyboardRemove(),
+                    "🔓 **Muvaffaqiyatli tasdiqlandi!** Xush kelibsiz.\n\n"
+                    "Siz botning to'liq boshqaruviga ega bo'ldingiz. Barcha funksiyalar va Admin panel ochildi!",
+                    reply_markup=main_keyboard,
+                    parse_mode="Markdown"
+                )
+                return
+            elif text.startswith("/start"):
+                await event.answer(
+                    "🔐 **Xavfsizlik tekshiruvi (Bot qulflangan):**\n\n"
+                    "Ushbu bot shaxsiy bot hisoblanadi. Undan to'liq foydalanish va akkauntni boshqarish uchun "
+                    "iltimos, o'zingiz o'rnatgan **maxfiy kirish kodingizni** yuboring:",
+                    parse_mode="Markdown"
+                )
+                return
+            else:
+                await event.answer(
+                    "❌ **Noto'g'ri kod kiritildi!**\n\n"
+                    "Iltimos, to'g'ri maxfiy kirish kodini kiriting:",
                     parse_mode="Markdown"
                 )
                 return
 
-            # Kodni o'zgartirish buyrug'i
-            if text.startswith("/setcode") or text.startswith("/setpass"):
-                if not db.is_authenticated(user.id):
-                    await event.answer("🔐 Avval joriy maxfiy kodni kiritib, botni oching!")
-                    return
-                parts = text.split(maxsplit=1)
-                if len(parts) == 2 and parts[1].strip():
-                    new_code = parts[1].strip()
-                    db.set_access_code(new_code)
-                    await event.answer(
-                        f"✅ **Yangi kirish kodi muvaffaqiyatli o'rnatildi:** `{new_code}`\n\n"
-                        "Uni eslab qoling! Botni qulflash uchun: /lock",
-                        parse_mode="Markdown"
-                    )
-                else:
-                    await event.answer(
-                        "❗ **Format:** `/setcode <yangi_kod>`\n"
-                        "Misol: `/setcode 9988` yoki `/setcode maxfiy_parol`",
-                        parse_mode="Markdown"
-                    )
-                return
+        # Qulflangan paytda matnsiz xabarlar yuborilsa
+        if isinstance(event, Message):
+            await event.answer(
+                "🔐 **Bot qulflangan!**\n\n"
+                "Iltimos, avval maxfiy kirish kodingizni matn ko'rinishida yuboring.",
+                parse_mode="Markdown"
+            )
+        elif isinstance(event, CallbackQuery):
+            await event.answer("🔐 Avval maxfiy kodni kiriting!", show_alert=True)
+        return
 
-            if text == "🔑 Kodni o'zgartirish":
-                await event.answer(
-                    "🔑 **Kodni o'zgartirish:**\n\n"
-                    "Yangi kod o'rnatish uchun quyidagi formatda yuboring:\n"
-                    "`/setcode <yangi_kod>`\n\n"
-                    "Misol: `/setcode 9988`",
-                    parse_mode="Markdown"
-                )
-                return
-
-            # Agar egasi hali tasdiqlanmagan (bot qulflangan) bo'lsa
-            if not db.is_authenticated(user.id):
-                current_code = db.get_access_code()
-                if text == current_code:
-                    db.set_authenticated(user.id, True)
-                    await event.answer(
-                        "🔓 **Muvaffaqiyatli tasdiqlandi!** Xush kelibsiz, xo'jayin.\n\n"
-                        "Botdan to'liq foydalanishingiz mumkin. Savolingizni bemalol yuboring!\n\n"
-                        "🔒 Qulflash: `/lock`\n"
-                        "🔑 Kodni o'zgartirish: `/setcode <yangi_kod>`",
-                        reply_markup=main_keyboard,
-                        parse_mode="Markdown"
-                    )
-                    return
-                else:
-                    await event.answer(
-                        "🔐 **Xavfsizlik tekshiruvi (Bot qulflangan):**\n\n"
-                        "Iltimos, botdan foydalanish uchun maxfiy kirish kodingizni kiriting:",
-                        parse_mode="Markdown"
-                    )
-                    return
-
-        # Qulflangan paytda matnsiz xabarlar (audio, rasm va h.k.)
-        if not db.is_authenticated(user.id):
-            if isinstance(event, Message):
-                await event.answer(
-                    "🔐 **Bot qulflangan!**\n\n"
-                    "Iltimos, avval maxfiy kirish kodingizni matn ko'rinishida kiriting.",
-                    parse_mode="Markdown"
-                )
-            elif isinstance(event, CallbackQuery):
-                await event.answer("🔐 Avval maxfiy kodni kiriting!", show_alert=True)
-            return
-
-        # Tasdiqlangan foydalanuvchi xabarlarini normal handlerlarga yo'naltirish
-        return await handler(event, data)
-
-# Middleware-ni barcha xabarlar va callback-lar uchun ro'yxatdan o'tkazamiz
 router.message.middleware(PrivateAuthMiddleware())
 router.callback_query.middleware(PrivateAuthMiddleware())
 
 def split_message(text: str, max_length: int = 4000) -> list[str]:
-    """Telegram xabar cheklovi (4096 belgi) uchun matnni bo'laklarga ajratish"""
+    """Telegram xabar cheklovi uchun matnni bo'laklarga ajratish"""
     if len(text) <= max_length:
         return [text]
-    
     parts = []
     while len(text) > max_length:
         split_idx = text.rfind("\n", 0, max_length)
@@ -157,16 +113,14 @@ def split_message(text: str, max_length: int = 4000) -> list[str]:
             split_idx = text.rfind(" ", 0, max_length)
         if split_idx == -1:
             split_idx = max_length
-        
         parts.append(text[:split_idx].strip())
         text = text[split_idx:].strip()
-    
     if text:
         parts.append(text)
     return parts
 
 async def safe_reply(message: Message, text: str):
-    """Xabarni xavfsiz jo'natish (Markdown parsing xatosi bo'lsa oddiy matn sifatida)"""
+    """Xabarni xavfsiz jo'natish"""
     parts = split_message(text)
     for part in parts:
         try:
@@ -174,7 +128,7 @@ async def safe_reply(message: Message, text: str):
         except Exception:
             await message.reply(part, parse_mode=None)
 
-# ----------------- GURUH VA KANALLAR KUZATUVI -----------------
+# ----------------- GURUH VA KANAL KUZATUVI -----------------
 
 @router.my_chat_member()
 async def handle_my_chat_member(event: ChatMemberUpdated):
@@ -193,60 +147,49 @@ async def handle_my_chat_member(event: ChatMemberUpdated):
         db.remove_chat(chat.id)
         logger.info(f"Bot chatdan chiqarildi: {chat.title} ({chat.id})")
 
-# ----------------- BUYRUQLAR -----------------
+# ----------------- ASOSIY BUYRUQLAR -----------------
 
 @router.message(CommandStart())
 async def handle_start(message: Message):
     user = message.from_user
     db.register_user(user.id, user.full_name, user.username)
-    is_creator = (user.id == config.CREATOR_ID)
-    
-    creator_badge = "\n👑 **Siz ushbu botning Yaratuvchisi (Egasi)siz!**\nBoshqaruv paneli uchun: /admin" if is_creator else ""
 
     text = (
         f"Assalomu alaykum, {user.first_name}! 👋\n\n"
-        "Men **Google Gemini AI** texnologiyasiga asoslangan aqlli Telegram botman.\n"
-        f"{creator_badge}\n\n"
-        "Quyidagi imkoniyatlarga egaman:\n"
-        "🔹 **Matnli savol-javob:** Istalgan mavzuda yozing\n"
-        "🔹 **Ovozli muloqot 🎙:** Menga ovozli xabar (audio) yuboring, men ham sizga ovoz bilan javob qaytaraman!\n"
-        "🔹 **Rasm tahlili 🖼:** Rasm yuboring, uni ko'rib tahlil qilaman\n"
-        "🔹 **Suhbat konteksti 🧠:** Oldingi aytganlaringizni eslab qolaman\n\n"
-        "Savolingizni yoki ovozli xabaringizni bemalol yuboring!"
+        "Men **Google Gemini AI** texnologiyasiga asoslangan kuchli Telegram Bot va Shaxsiy AI Yordamchingizman.\n\n"
+        "✨ **Imkoniyatlarim:**\n"
+        "🔹 **Matnli va Ovozli muloqot:** Ovozli xabar jo'nating, ovoz bilan javob qaytaraman.\n"
+        "🔹 **Rasm tahlili:** Rasmni ko'rib, savollarga javob beraman.\n"
+        "🔹 **Guruhlarda ishlash:** Guruhga qo'shib, `@bot` deb yozsangiz javob beraman.\n"
+        "🔹 **Shaxsiy Telegram nazorati (Userbot):** Lichkaga kelgan xabarlarga aqlli avto-javob, kanallarni o'qish va tahlil qilish.\n"
+        "🔹 **Menga moslashish:** Sizning fe'l-atvoringiz va uslubingizga to'liq moslashish."
     )
     await message.answer(text, reply_markup=main_keyboard, parse_mode="Markdown")
 
 @router.message(Command("help"))
 @router.message(F.text == "💡 Yordam")
 async def handle_help(message: Message):
-    is_creator = (message.from_user.id == config.CREATOR_ID)
-    admin_help = (
-        "\n\n👑 **Xavfsizlik va Boshqaruv buyruqlari:**\n"
-        "🔒 `/lock` - Botni qulflash (qayta kirishda kod so'raydi)\n"
-        "🔑 `/setcode <kod>` - Maxfiy kirish kodini o'zgartirish\n"
-        "/admin - Boshqaruv paneli va statistika\n"
-        "/send <ID/@username> <matn> - Belgilangan odam yoki chatga xabar yuborish\n"
-        "/broadcast <matn> - Barcha a'zolarga va guruhlarga e'lon tarqatish\n"
-        "/chats - Bot ulangan barcha guruh va kanallar ro'yxati\n"
-        "/post <kanal_id> <matn> - Kanalga post joylash"
-    ) if is_creator else ""
-
     text = (
-        "💡 **Botdan foydalanish bo'yicha qo'llanma:**\n\n"
-        "1. **Matnli muloqot:** Istalgan savolingizni yozing.\n"
-        "2. **Ovozli muloqot 🎙:** Ovozli xabar jo'nating, AI uni tinglab, sizga o'zbek tilida ovoz bilan javob qaytaradi.\n"
-        "3. **Rasmlar:** Rasmni izohi bilan yuboring.\n"
-        "4. **Yangi suhbat:** Tarixni tozalash uchun /reset buyrug'i yoki **💬 Yangi suhbat** tugmasidan foydalaning."
-        f"{admin_help}"
-    )
-    await message.answer(text, parse_mode="Markdown")
-
-@router.message(F.text == "🎙 Ovozli yordam")
-async def handle_voice_help(message: Message):
-    text = (
-        "🎙 **Ovozli muloqot rejimi faol!**\n\n"
-        "Menga Telegram orqali oddiy **ovozli xabar (Voice message)** yuboring.\n"
-        "Google Gemini ovozingizni tinglab, nima deganingizni tushunadi va javobni ham **tabiiy o'zbekcha ovozda** qaytaradi!"
+        "💡 **Buyruqlar va qo'llanma:**\n\n"
+        "👑 **Boshqaruv:**\n"
+        "• `/admin` — To'liq interaktiv boshqaruv paneli\n"
+        "• `/agent` — Shaxsiy AI Kotib (Userbot) paneli\n"
+        "• `/lock` — Botni qulflash\n"
+        "• `/setcode <kod>` — Yangi maxfiy kod o'rnatish\n\n"
+        "🧠 **Moslashish va Persona:**\n"
+        "• `/adapt <matn>` — AI ga sizning shaxsiyatingiz va uslubingizga moslashish buyrug'i\n"
+        "• `/persona` — Hozirgi shaxsiyat sozlamalarini ko'rish\n\n"
+        "🚫 **Qora ro'yxat (Bloklash):**\n"
+        "• `/blacklist` — Bloklangan shaxslar ro'yxati\n"
+        "• `/block <id>` — Foydalanuvchini bloklash\n"
+        "• `/unblock <id>` — Blokdan chiqarish\n\n"
+        "📱 **Akkaunt nazorati (Userbot):**\n"
+        "• `/mychats` — Guruhlar va kanallar ro'yxati\n"
+        "• `/read <chat_id> [soni]` — Xabarlarni o'qish va AI konspektini olish\n"
+        "• `/botcall <@bot> <buyruq>` — Boshqa botlarga buyruq jo'natish\n"
+        "• `/reply <id> <matn>` — O'z nomingizdan xabar yozish\n\n"
+        "👥 **Guruhlar:**\n"
+        "• `/ai <savol>` — Guruhda sun'iy intellektdan javob olish"
     )
     await message.answer(text, parse_mode="Markdown")
 
@@ -254,133 +197,341 @@ async def handle_voice_help(message: Message):
 @router.message(Command("clear"))
 @router.message(F.text == "💬 Yangi suhbat")
 async def handle_reset(message: Message):
-    user_id = message.from_user.id
-    gemini.reset_chat(user_id)
+    gemini.reset_chat(message.chat.id)
     await message.answer("🧹 **Suhbat xotirasi tozalandi!** Yangi mavzuni boshlashingiz mumkin.", parse_mode="Markdown")
 
-@router.message(Command("about"))
-@router.message(F.text == "ℹ️ Bot haqida")
-async def handle_about(message: Message):
-    stats = db.get_stats()
+@router.message(F.text == "🎙 Ovozli yordam")
+async def handle_voice_help(message: Message):
     text = (
-        "ℹ️ **Bot haqida ma'lumot:**\n\n"
-        f"🤖 **AI Modeli:** {gemini.model_name}\n"
-        f"🎙 **Ovoz sintezi:** Microsoft Edge Neural TTS (O'zbekcha)\n"
-        f"👑 **Yaratuvchi ID:** `{config.CREATOR_ID}`\n"
-        f"👥 **Foydalanuvchilar:** {stats['total_users']}\n"
-        f"📢 **Guruh va kanallar:** {stats['total_chats']}\n"
-        "⚡ **Platforma:** aiogram 3 & Google GenAI"
+        "🎙 **Ovozli muloqot rejimi faol!**\n\n"
+        "Menga shunchaki oddiy **ovozli xabar (Voice message)** yuboring. "
+        "Google Gemini uni eshitadi va javobni ham o'zbek tilida **tabiiy ovozda** qaytaradi!"
     )
     await message.answer(text, parse_mode="Markdown")
 
-# ----------------- SHAXSIY AI AGENT (USERBOT) BOSHQARUVI -----------------
+# ----------------- XAVFSIZLIK VA KOD BOSHQARUVI -----------------
 
-@router.message(Command("agent"))
-async def handle_agent_command(message: Message):
-    """Shaxsiy Telegram AI Agentini boshqarish"""
-    if message.from_user.id != config.CREATOR_ID:
-        await message.reply("⛔ Kechirasiz, bu buyruq faqat bot egasi uchun!")
+@router.message(Command("lock"))
+@router.message(F.text == "🔒 Qulflash")
+async def handle_lock(message: Message):
+    db.set_authenticated(message.from_user.id, False)
+    await message.answer(
+        "🔒 **Bot qulflandi!**\n\n"
+        "Qayta kirish uchun maxfiy kodingizni yuboring:",
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode="Markdown"
+    )
+
+@router.message(Command("setcode"))
+@router.message(Command("setpass"))
+async def handle_setcode(message: Message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) == 2 and parts[1].strip():
+        new_code = parts[1].strip()
+        db.set_access_code(new_code)
+        await message.answer(
+            f"✅ **Yangi kirish kodi muvaffaqiyatli o'rnatildi:** `{new_code}`\n\n"
+            "Uni eslab qoling! Botni qulflash uchun: `/lock`",
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer("Format: `/setcode <yangi_kod>`\nMisol: `/setcode 7788`", parse_mode="Markdown")
+
+@router.message(F.text == "🔑 Kodni o'zgartirish")
+async def handle_change_code_btn(message: Message):
+    await message.answer("🔑 Yangi kod o'rnatish uchun quyidagicha yuboring:\n`/setcode <yangi_kod>`\n\nMisol: `/setcode 9988`", parse_mode="Markdown")
+
+# ----------------- MENGA MOSLASHISH (PERSONA & ADAPTATION) -----------------
+
+@router.message(Command("adapt"))
+async def handle_adapt_command(message: Message):
+    """Botni egasiga moslashtirish buyrug'i"""
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        persona = db.get_persona()
+        text = (
+            "🧠 **Menga moslashish (Shaxsiyat va Uslub):**\n\n"
+            f"👤 **Ism:** {persona.get('owner_name')}\n"
+            f"ℹ️ **Siz haqingizda:** {persona.get('about_me')}\n"
+            f"🎭 **Muloqot uslubi:** {persona.get('communication_style')}\n"
+            f"📜 **Qoidalar:** {persona.get('custom_rules')}\n\n"
+            "💡 **Moslashtirish uchun yozing:**\n"
+            "`/adapt Men dasturchiman, rasmiy emas do'stona va qisqa gapir`"
+        )
+        await message.answer(text, parse_mode="Markdown")
         return
 
-    args = message.text.split(maxsplit=2)
+    adaptation_text = parts[1].strip()
+    db.set_full_adaptation(about=adaptation_text, rules="Suhbatdosh bilan har bir xabarda qayta salomlashmang!")
+    await message.answer(
+        "✅ **Muvaffaqiyatli saqlandi!**\n\n"
+        "AI endi sizning yangi shaxsiyatingiz va ko'rsatmalaringizga to'liq moslashgan holda muloqot qiladi.",
+        parse_mode="Markdown"
+    )
 
-    # 1. /agent on
-    if len(args) > 1 and args[1].lower() == "on":
-        db.set_agent_enabled(True)
-        await message.reply("🟢 **AI Agent (Auto-Responder) yoqildi!**\nShaxsiy lichkangizga kelgan xabarlarga AI sizning nomingizdan javob qaytaradi.", parse_mode="Markdown")
+@router.message(Command("persona"))
+@router.message(F.text == "🧠 Menga moslashish")
+async def handle_persona_btn(message: Message):
+    persona = db.get_persona()
+    text = (
+        "🧠 **AI Shaxsiyati va Sizga moslashuv holati:**\n\n"
+        f"👤 **Egasi ismi:** {persona.get('owner_name')}\n"
+        f"ℹ️ **Siz haqingizda ma'lumot:**\n_{persona.get('about_me')}_\n\n"
+        f"🎭 **Muloqot uslubi:**\n_{persona.get('communication_style')}_\n\n"
+        f"📜 **Maxsus qoidalar:**\n_{persona.get('custom_rules')}_\n\n"
+        "Yangilash uchun: `/adapt <o'zingiz haqingizda va muloqot uslubingiz haqida matn>`"
+    )
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Ismni o'zgartirish", callback_data="persona_name")],
+        [InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_main")]
+    ])
+    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+# ----------------- QORA RO'YXAT (BLACKLIST) BOSHQARUVI -----------------
+
+@router.message(Command("blacklist"))
+@router.message(Command("blocked"))
+@router.message(F.text == "🚫 Qora ro'yxat")
+async def handle_blacklist_view(message: Message):
+    blocked_list = db.get_blacklist_detailed()
+    if not blocked_list:
+        text = "🚫 **Qora ro'yxat bo'sh.** Hozircha hech kim bloklanmagan.\n\nFoydalanuvchini bloklash uchun: `/block <user_id>`"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_main")]
+        ])
+        await message.answer(text, reply_markup=kb, parse_mode="Markdown")
         return
 
-    # 2. /agent off
-    if len(args) > 1 and args[1].lower() == "off":
-        db.set_agent_enabled(False)
-        await message.reply("🔴 **AI Agent o'chirildi!**\nShaxsiy xabarlarga avtomatik javob berilmaydi.", parse_mode="Markdown")
-        return
+    text = f"🚫 **Qora ro'yxatdagi foydalanuvchilar ({len(blocked_list)} ta):**\n\n"
+    keyboard_rows = []
+    for item in blocked_list[:15]:
+        uid = item["id"]
+        name = item["name"]
+        uname = f"(@{item['username']})" if item.get("username") else ""
+        date = f"[{item.get('date')}]" if item.get("date") else ""
+        text += f"• **{name}** {uname} — ID: `{uid}` {date}\n"
+        keyboard_rows.append([
+            InlineKeyboardButton(text=f"🗑 Chiqarish: {name[:12]} ({uid})", callback_data=f"agent_unblock_{uid}")
+        ])
 
-    # 3. /agent mode as_me | assistant
-    if len(args) > 1 and args[1].lower() == "mode":
-        if len(args) < 3:
-            current_mode = db.get_agent_mode()
-            mode_desc = "👤 To'g'ridan-to'g'ri mening nomimdan (As Me)" if current_mode == "as_me" else "🤖 AI Kotib sifatida"
-            await message.reply(f"🎭 **Hozirgi uslub:** {mode_desc}\n\nO'zgartirish uchun:\n`/agent mode as_me` (Mening nomimdan)\n`/agent mode assistant` (Kotib sifatida)", parse_mode="Markdown")
-            return
-        new_mode = args[2].lower()
-        if new_mode in ["as_me", "me", "men"]:
-            db.set_agent_mode("as_me")
-            await message.reply("✅ **Javob berish uslubi: 👤 To'g'ridan-to'g'ri sizning nomingizdan!**\nAI birinchi shaxsda ('men') javob beradi va o'zini bot deb tanishtirmaydi.", parse_mode="Markdown")
-        elif new_mode in ["assistant", "kotib", "bot"]:
-            db.set_agent_mode("assistant")
-            await message.reply("✅ **Javob berish uslubi: 🤖 AI Kotib sifatida!**\nAI sizning yordamchingiz sifatida javob beradi.", parse_mode="Markdown")
-        else:
-            await message.reply("Noto'g'ri uslub. Tanlang: `/agent mode as_me` yoki `/agent mode assistant`")
-        return
+    keyboard_rows.append([InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_main")])
+    kb = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
+    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
 
-    # 4. /agent myinfo <matn>
-    if len(args) > 1 and args[1].lower() == "myinfo":
-        if len(args) < 3:
-            current_info = db.get_owner_info()
-            await message.reply(f"ℹ️ **Siz haqingizdagi hozirgi ma'lumotlar:**\n\n_{current_info}_\n\nO'zgartirish uchun:\n`/agent myinfo <o'zingiz haqingizda ma'lumot>`", parse_mode="Markdown")
-            return
-        new_info = args[2].strip()
-        db.set_owner_info(new_info)
-        await message.reply("✅ **Shaxsiy ma'lumotlaringiz yangilandi!**\nAI sizning nomingizdan gapirganda ushbu ma'lumotlarga asoslanadi.", parse_mode="Markdown")
+@router.message(Command("block"))
+async def handle_block_user(message: Message):
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+        await message.reply("Format: `/block <user_id> [izoh]`\nMisol: `/block 1234567 Reklamachi`", parse_mode="Markdown")
         return
+    uid = int(parts[1])
+    note = parts[2].strip() if len(parts) > 2 else "Qo'lda bloklangan"
+    db.add_to_blacklist(uid, name=note)
+    await message.reply(f"🚫 `{uid}` ID li foydalanuvchi qora ro'yxatga kiritildi. AI unga javob bermaydi.", parse_mode="Markdown")
 
-    # 5. /agent prompt
-    if len(args) > 1 and args[1].lower() == "prompt":
-        if len(args) < 3:
-            current_prompt = db.get_agent_prompt()
-            await message.reply(f"📝 **Hozirgi AI Agent ko'rsatmasi (Prompt):**\n\n_{current_prompt}_\n\nO'zgartirish uchun: `/agent prompt <yangi ko'rsatma>`", parse_mode="Markdown")
-            return
-        new_prompt = args[2].strip()
-        db.set_agent_prompt(new_prompt)
-        await message.reply("✅ **AI Agent ko'rsatmasi yangilandi!**\nAI endi yangi ko'rsatma bo'yicha javob qaytaradi.", parse_mode="Markdown")
+@router.message(Command("unblock"))
+async def handle_unblock_user(message: Message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].lstrip("-").isdigit():
+        await message.reply("Format: `/unblock <user_id>`", parse_mode="Markdown")
         return
-
-    # 6. /agent ignore <user_id>
-    if len(args) > 1 and args[1].lower() == "ignore":
-        if len(args) < 3 or not args[2].isdigit():
-            await message.reply("Format: `/agent ignore <user_id>`")
-            return
-        uid = int(args[2])
-        db.add_to_blacklist(uid)
-        await message.reply(f"🚫 `{uid}` ID li foydalanuvchi qora ro'yxatga olindi (AI unga javob bermaydi).", parse_mode="Markdown")
-        return
-
-    # 7. /agent unignore <user_id>
-    if len(args) > 1 and args[1].lower() == "unignore":
-        if len(args) < 3 or not args[2].isdigit():
-            await message.reply("Format: `/agent unignore <user_id>`")
-            return
-        uid = int(args[2])
-        db.remove_from_blacklist(uid)
+    uid = int(parts[1])
+    removed = db.remove_from_blacklist(uid)
+    if removed:
         await message.reply(f"✅ `{uid}` qora ro'yxatdan chiqarildi.", parse_mode="Markdown")
-        return
+    else:
+        await message.reply(f"`{uid}` qora ro'yxatda topilmadi.", parse_mode="Markdown")
 
-    # 8. /agent status va menyu
-    await send_agent_dashboard(message)
+# ----------------- KENGAYTIRILGAN ADMIN PANEL -----------------
+
+def build_admin_main_kb():
+    status = userbot.get_status()
+    agent_status_emoji = "🟢" if status["agent_enabled"] else "🔴"
+    smart_filter_emoji = "🛡" if status["stats"]["smart_filter"] else "⚪️"
+
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text=f"🤖 AI Kotib: {agent_status_emoji}", callback_data="admin_agent_menu"),
+            InlineKeyboardButton(text=f"Aqlli filtr: {smart_filter_emoji}", callback_data="admin_toggle_filter")
+        ],
+        [
+            InlineKeyboardButton(text="🧠 Menga moslashish", callback_data="admin_persona"),
+            InlineKeyboardButton(text="🚫 Qora ro'yxat", callback_data="admin_blacklist")
+        ],
+        [
+            InlineKeyboardButton(text="📱 Chatlarim (Userbot)", callback_data="admin_mychats"),
+            InlineKeyboardButton(text="🤖 Boshqa botlar", callback_data="admin_botcall_help")
+        ],
+        [
+            InlineKeyboardButton(text="📢 E'lon tarqatish", callback_data="admin_broadcast_help"),
+            InlineKeyboardButton(text="📊 To'liq statistika", callback_data="admin_stats")
+        ],
+        [
+            InlineKeyboardButton(text="🔄 Yangilash", callback_data="admin_main")
+        ]
+    ])
+
+@router.message(Command("admin"))
+@router.message(F.text == "👑 Admin Panel")
+async def handle_admin(message: Message):
+    stats = db.get_stats()
+    status = userbot.get_status()
+    ub_conn = "🟢 Faol" if status["connected"] else "🔴 Ulanmagan"
+
+    text = (
+        "👑 **Boshqaruv Paneli**\n\n"
+        f"📱 **Telegram Userbot:** {ub_conn}\n"
+        f"🤖 **AI Kotib (Auto-reply):** {'🟢 Yoqilgan' if status['agent_enabled'] else '🔴 O\'chirilgan'}\n"
+        f"🎭 **Uslub:** {'👤 Sizning nomingizdan' if db.get_agent_mode() == 'as_me' else '🤖 AI Kotib'}\n"
+        f"👥 **Bot foydalanuvchilari:** {stats['total_users']} ta\n"
+        f"📢 **Guruh va kanallar:** {stats['total_chats']} ta\n"
+        f"🚫 **Bloklanganlar:** {len(db.get_agent_blacklist())} ta\n\n"
+        "Quyidagi tugmalar orqali kerakli bo'limni tanlang:"
+    )
+    await message.answer(text, reply_markup=build_admin_main_kb(), parse_mode="Markdown")
+
+@router.callback_query(F.data.startswith("admin_"))
+async def handle_admin_callbacks(callback: CallbackQuery):
+    data = callback.data
+    
+    if data == "admin_main":
+        stats = db.get_stats()
+        status = userbot.get_status()
+        ub_conn = "🟢 Faol" if status["connected"] else "🔴 Ulanmagan"
+        text = (
+            "👑 **Boshqaruv Paneli**\n\n"
+            f"📱 **Telegram Userbot:** {ub_conn}\n"
+            f"🤖 **AI Kotib (Auto-reply):** {'🟢 Yoqilgan' if status['agent_enabled'] else '🔴 O\'chirilgan'}\n"
+            f"🎭 **Uslub:** {'👤 Sizning nomingizdan' if db.get_agent_mode() == 'as_me' else '🤖 AI Kotib'}\n"
+            f"👥 **Bot foydalanuvchilari:** {stats['total_users']} ta\n"
+            f"📢 **Guruh va kanallar:** {stats['total_chats']} ta\n"
+            f"🚫 **Bloklanganlar:** {len(db.get_agent_blacklist())} ta"
+        )
+        await callback.message.edit_text(text, reply_markup=build_admin_main_kb(), parse_mode="Markdown")
+        await callback.answer()
+
+    elif data == "admin_toggle_filter":
+        new_state = not db.is_smart_filter_enabled()
+        db.set_smart_filter(new_state)
+        await callback.answer(f"Aqlli filtr: {'Yoqildi' if new_state else 'O‘chirildi'}")
+        await callback.message.edit_reply_markup(reply_markup=build_admin_main_kb())
+
+    elif data == "admin_agent_menu":
+        text, kb = build_agent_dashboard()
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        await callback.answer()
+
+    elif data == "admin_persona":
+        persona = db.get_persona()
+        text = (
+            "🧠 **AI Shaxsiyati va Moslashuvi:**\n\n"
+            f"👤 **Egasi:** {persona.get('owner_name')}\n"
+            f"ℹ️ **Ma'lumot:** {persona.get('about_me')}\n"
+            f"🎭 **Uslub:** {persona.get('communication_style')}\n\n"
+            "O'zgartirish uchun: `/adapt <matn>`"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Asosiy Menyu", callback_data="admin_main")]
+        ])
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        await callback.answer()
+
+    elif data == "admin_blacklist":
+        blocked_list = db.get_blacklist_detailed()
+        rows = []
+        if not blocked_list:
+            text = "🚫 **Qora ro'yxat bo'sh.**\n\nFoydalanuvchini qo'shish: `/block <user_id>`"
+        else:
+            text = f"🚫 **Qora ro'yxatdagi foydalanuvchilar ({len(blocked_list)} ta):**\n\n"
+            for item in blocked_list[:10]:
+                uid = item["id"]
+                name = item["name"]
+                text += f"• **{name}** (`{uid}`)\n"
+                rows.append([InlineKeyboardButton(text=f"🗑 Chiqarish: {name[:12]} ({uid})", callback_data=f"agent_unblock_{uid}")])
+        rows.append([InlineKeyboardButton(text="🔙 Asosiy Menyu", callback_data="admin_main")])
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="Markdown")
+        await callback.answer()
+
+    elif data == "admin_mychats":
+        await callback.answer("Yuklanmoqda...")
+        dialogs = await userbot.get_dialogs_list(limit=15)
+        if not dialogs:
+            text = "Chatlar ro'yxatini olib bo'lmadi. Userbot ulanganligini tekshiring."
+        else:
+            text = "📋 **Siz a'zo bo'lgan chatlar (Userbot):**\n\n"
+            for d in dialogs:
+                icon = "📢" if d["type"] == "channel" else ("👥" if d["type"] == "group" else ("🤖" if d["type"] == "bot" else "👤"))
+                uname = f"(@{d['username']})" if d.get("username") else ""
+                text += f"{icon} **{d['title']}** {uname}\n  ID: `{d['id']}`\n"
+            text += "\nXabarlarni o'qish uchun: `/read <id yoki @username>`"
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Asosiy Menyu", callback_data="admin_main")]
+        ])
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+
+    elif data == "admin_botcall_help":
+        text = (
+            "🤖 **Boshqa botlardan foydalanish (Userbot orqali):**\n\n"
+            "Siz o'z shaxsiy akkauntingiz nomidan istalgan Telegram botiga buyruq yuborishingiz va uning javobini shu botda ko'rishingiz mumkin!\n\n"
+            "Format: `/botcall <@bot_username> <buyruq>`\n"
+            "Misol: `/botcall @vkmusic_bot /start` yoki `/botcall @ChatGPT_bot Salom`"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Asosiy Menyu", callback_data="admin_main")]
+        ])
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        await callback.answer()
+
+    elif data == "admin_broadcast_help":
+        text = (
+            "📢 **E'lon tarqatish (Broadcast):**\n\n"
+            "Bot barcha a'zolari va ulangan guruhlariga e'lon yuborish uchun quyidagi buyruqdan foydalaning:\n\n"
+            "`/broadcast <xabar matni>`"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Asosiy Menyu", callback_data="admin_main")]
+        ])
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        await callback.answer()
+
+    elif data == "admin_stats":
+        stats = db.get_stats()
+        agent_st = userbot.get_status()
+        text = (
+            "📊 **Tizim va Foydalanish Statistikasi:**\n\n"
+            f"👥 **Jami foydalanuvchilar:** {stats['total_users']}\n"
+            f"👥 **Guruhlar:** {stats['total_groups']}\n"
+            f"📢 **Kanallar:** {stats['total_channels']}\n"
+            f"💬 **AI Kotib javob bergan xabarlar:** {agent_st['stats']['replied_count']} ta\n"
+            f"🚫 **Qora ro'yxatdagilar:** {agent_st['stats']['blacklist_count']} ta\n"
+            f"⚡ **AI Modeli:** {gemini.model_name}"
+        )
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Asosiy Menyu", callback_data="admin_main")]
+        ])
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        await callback.answer()
+
+# ----------------- SHAXSIY AI KOTIB (USERBOT) MENYUSI -----------------
 
 def build_agent_dashboard():
     status = userbot.get_status()
-    conn_text = "🟢 Ulangan (Faol)" if status["connected"] else ("⚠️ Sozlangan, lekin ulanmagan" if status["configured"] else "🔴 Ulanmagan (.env da sessiya yo'q)")
+    conn_text = "🟢 Ulangan (Faol)" if status["connected"] else "🔴 Ulanmagan"
     agent_switch = "🟢 Yoqilgan" if status["agent_enabled"] else "🔴 O'chirilgan"
-    mode_text = "👤 To'g'ridan-to'g'ri sizning nomingizdan" if db.get_agent_mode() == "as_me" else "🤖 AI Kotib sifatida"
+    mode_text = "👤 Sizning nomingizdan" if db.get_agent_mode() == "as_me" else "🤖 AI Kotib sifatida"
     user_info = f"{status['user_name']} (@{status['username']})" if status['user_name'] else "Aniqlanmagan"
+    filter_st = "🟢 Yoqilgan (Keraksiz xabarlarga javob yo'q)" if status["stats"]["smart_filter"] else "🔴 O'chirilgan"
 
     text = (
         "🤖 **Telegram AI Agent (Shaxsiy Kotib) Paneli**\n\n"
         f"📱 **Shaxsiy akkaunt:** {user_info}\n"
         f"🔌 **Ulanish holati:** {conn_text}\n"
-        f"⚡ **AI Avto-javob:** {agent_switch}\n"
+        f"⚡ **Avto-javob:** {agent_switch}\n"
+        f"🛡 **Aqlli filtr:** {filter_st}\n"
         f"🎭 **Javob berish uslubi:** {mode_text}\n"
-        f"💬 **Javob berilgan xabarlar:** {status['stats']['replied_count']} ta\n"
-        f"🚫 **Qora ro'yxatdagi shaxslar:** {status['stats']['blacklist_count']} ta\n\n"
-        "🛠 **Asosiy buyruqlar:**\n"
-        "🔹 `/agent mode as_me` — To'g'ridan-to'g'ri mening nomimdan javob berish\n"
-        "🔹 `/agent mode assistant` — AI kotib sifatida javob berish\n"
-        "🔹 `/agent myinfo <matn>` — O'zingiz haqingizda ma'lumot kiritish\n"
-        "🔹 `/agent prompt <matn>` — AI xarakterini sozlash\n"
-        "🔹 `/reply <user_id> <matn>` — Shaxsiy nomingizdan xabar yozish\n"
-        "🔹 *Yoki bot yuborgan xabarnomaga shunchaki Reply (Ответить) qiling!*"
+        f"💬 **Javob berilgan:** {status['stats']['replied_count']} ta\n"
+        f"🚫 **Qora ro'yxat:** {status['stats']['blacklist_count']} ta\n\n"
+        "💡 *Eslatma: Bir vaqtda bir nechta xabar kelsa bitta qilib javob beriladi va takroriy salomlashilmaydi!*"
     )
 
     mode_btn = "🔄 Uslub: Kotibga o'tish" if db.get_agent_mode() == "as_me" else "🔄 Uslub: Mening nomimga o'tish"
@@ -390,31 +541,30 @@ def build_agent_dashboard():
             InlineKeyboardButton(text=mode_btn, callback_data="agent_toggle_mode")
         ],
         [
-            InlineKeyboardButton(text="📝 Prompt", callback_data="agent_show_prompt"),
-            InlineKeyboardButton(text="ℹ️ Ma'lumotim", callback_data="agent_show_myinfo")
+            InlineKeyboardButton(text="🛡 Aqlli filtrni o'zgartirish", callback_data="agent_toggle_filter"),
+            InlineKeyboardButton(text="🧠 Moslashish", callback_data="admin_persona")
         ],
         [
-            InlineKeyboardButton(text="🔄 Yangilash", callback_data="agent_refresh")
+            InlineKeyboardButton(text="🚫 Qora ro'yxat", callback_data="admin_blacklist"),
+            InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_main")
         ]
     ])
     return text, kb
 
-async def send_agent_dashboard(message: Message):
+@router.message(Command("agent"))
+@router.message(F.text == "🤖 AI Kotib (Userbot)")
+async def handle_agent_command(message: Message):
     text, kb = build_agent_dashboard()
     await message.answer(text, reply_markup=kb, parse_mode="Markdown")
 
 @router.callback_query(F.data.startswith("agent_"))
 async def handle_agent_callback(callback: CallbackQuery):
-    if callback.from_user.id != config.CREATOR_ID:
-        await callback.answer("Ruxsat berilmagan!", show_alert=True)
-        return
-
     data = callback.data
+    
     if data == "agent_toggle":
         new_state = not db.is_agent_enabled()
         db.set_agent_enabled(new_state)
-        state_msg = "yoqildi" if new_state else "o'chirildi"
-        await callback.answer(f"AI Agent {state_msg}!")
+        await callback.answer(f"AI Agent {'yoqildi' if new_state else 'o‘chirildi'}!")
         text, kb = build_agent_dashboard()
         try:
             await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
@@ -433,15 +583,15 @@ async def handle_agent_callback(callback: CallbackQuery):
         except Exception:
             pass
 
-    elif data == "agent_show_prompt":
-        prompt = db.get_agent_prompt()
-        await callback.message.answer(f"📝 **Hozirgi AI Agent ko'rsatmasi (Prompt):**\n\n_{prompt}_\n\nO'zgartirish uchun:\n`/agent prompt <yangi ko'rsatma>`", parse_mode="Markdown")
-        await callback.answer()
-
-    elif data == "agent_show_myinfo":
-        info = db.get_owner_info()
-        await callback.message.answer(f"ℹ️ **Siz haqingizdagi ma'lumotlar:**\n\n_{info}_\n\nO'zgartirish uchun:\n`/agent myinfo <o'zingiz haqingizda ma'lumot>`", parse_mode="Markdown")
-        await callback.answer()
+    elif data == "agent_toggle_filter":
+        new_state = not db.is_smart_filter_enabled()
+        db.set_smart_filter(new_state)
+        await callback.answer(f"Aqlli filtr {'yoqildi' if new_state else 'o‘chirildi'}!")
+        text, kb = build_agent_dashboard()
+        try:
+            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        except Exception:
+            pass
 
     elif data.startswith("agent_block_"):
         uid = int(data.split("_")[2])
@@ -452,26 +602,117 @@ async def handle_agent_callback(callback: CallbackQuery):
         except Exception:
             pass
 
-    elif data == "agent_refresh":
-        await callback.answer("Yangilandi!")
-        text, kb = build_agent_dashboard()
+    elif data.startswith("agent_unblock_"):
+        uid = int(data.split("_")[2])
+        db.remove_from_blacklist(uid)
+        await callback.answer(f"Foydalanuvchi {uid} qora ro'yxatdan chiqarildi!", show_alert=True)
+        # Qora ro'yxat menyusini yangilash
+        blocked_list = db.get_blacklist_detailed()
+        rows = []
+        if not blocked_list:
+            text = "🚫 **Qora ro'yxat bo'sh.**\n\nFoydalanuvchini qo'shish: `/block <user_id>`"
+        else:
+            text = f"🚫 **Qora ro'yxatdagi foydalanuvchilar ({len(blocked_list)} ta):**\n\n"
+            for item in blocked_list[:10]:
+                u = item["id"]
+                name = item["name"]
+                text += f"• **{name}** (`{u}`)\n"
+                rows.append([InlineKeyboardButton(text=f"🗑 Chiqarish: {name[:12]} ({u})", callback_data=f"agent_unblock_{u}")])
+        rows.append([InlineKeyboardButton(text="🔙 Asosiy Menyu", callback_data="admin_main")])
         try:
-            await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+            await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="Markdown")
         except Exception:
             pass
 
-@router.message(F.reply_to_message)
-async def handle_reply_to_notification(message: Message):
-    """Egasining bot xabarnomalariga Reply (Ответить) qilib yozgan javobini shaxsiy akkauntdan yuborish"""
-    if message.from_user.id != config.CREATOR_ID:
+# ----------------- AKKAUNTNI BOSHQARISH BUYRUQLARI -----------------
+
+@router.message(Command("mychats"))
+async def handle_mychats(message: Message):
+    """Userbot qo'shilgan chatlarni ko'rish"""
+    dialogs = await userbot.get_dialogs_list(limit=25)
+    if not dialogs:
+        await message.reply("Chatlar ro'yxatini olib bo'lmadi. Userbot ulanganligini tekshiring.")
         return
 
+    lines = ["📋 **Siz a'zo bo'lgan chatlar (Userbot):**\n"]
+    for d in dialogs:
+        icon = "📢" if d["type"] == "channel" else ("👥" if d["type"] == "group" else ("🤖" if d["type"] == "bot" else "👤"))
+        uname = f"(@{d['username']})" if d.get("username") else ""
+        lines.append(f"{icon} **{d['title']}** {uname}\n  ID: `{d['id']}`")
+
+    lines.append("\n💡 Xabarlarni o'qish uchun: `/read <chat_id> [soni]`")
+    await safe_reply(message, "\n".join(lines))
+
+@router.message(Command("read"))
+async def handle_read_chat(message: Message):
+    """Istalgan kanal yoki guruhdagi so'nggi xabarlarni o'qish va AI konspektini olish"""
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 2:
+        await message.reply("Format: `/read <chat_id yoki @username> [xabarlar_soni]`\nMisol: `/read @daryo 10`", parse_mode="Markdown")
+        return
+
+    target = parts[1].strip()
+    target_id = int(target) if (target.isdigit() or target.startswith("-")) else target
+    limit = int(parts[2]) if (len(parts) > 2 and parts[2].isdigit()) else 12
+
+    status_msg = await message.reply("⏳ Xabarlar o'qilmoqda va AI tahlil qilmoqda...")
+    raw_history = await userbot.get_chat_history_text(target_id, limit=limit)
+
+    if "Xatolik" in raw_history or "topilmadi" in raw_history:
+        await status_msg.edit_text(f"❌ {raw_history}")
+        return
+
+    # Gemini orqali qisqacha xulosa
+    summary = await gemini.summarize_chat_messages(chat_title=str(target), messages_text=raw_history)
+    await status_msg.edit_text(
+        f"📖 **{target} — So'nggi {limit} ta xabar konspekti:**\n\n{summary}",
+        parse_mode="Markdown"
+    )
+
+@router.message(Command("botcall"))
+async def handle_botcall(message: Message):
+    """Boshqa Telegram botga buyruq jo'natish"""
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3:
+        await message.reply("Format: `/botcall <@bot_username> <buyruq>`\nMisol: `/botcall @vkmusic_bot /start`", parse_mode="Markdown")
+        return
+
+    bot_username = parts[1].strip().lstrip("@")
+    command = parts[2].strip()
+
+    status_msg = await message.reply(f"⏳ `@{bot_username}` ga '{command}' yuborilmoqda...")
+    bot_reply = await userbot.interact_with_bot(bot_username, command)
+    await status_msg.edit_text(
+        f"🤖 **@{bot_username} javobi:**\n\n{bot_reply}",
+        parse_mode=None
+    )
+
+@router.message(Command("reply"))
+async def handle_direct_reply(message: Message):
+    """Shaxsiy akkaunt nomidan belgilangan chat/shaxsga xabar yuborish"""
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        await message.reply("Format: `/reply <user_id yoki @username> <xabar matni>`", parse_mode="Markdown")
+        return
+
+    target = args[1].strip()
+    reply_text = args[2].strip()
+    target_id = int(target) if (target.isdigit() or target.startswith("-")) else target
+
+    success = await userbot.send_direct_message(target_id, reply_text)
+    if success:
+        await message.reply(f"✅ Shaxsiy Telegram akkauntingiz nomidan `{target}` ga xabar yuborildi!", parse_mode="Markdown")
+    else:
+        await message.reply("❌ Xabar yuborishda xatolik yuz berdi.")
+
+@router.message(F.reply_to_message)
+async def handle_reply_to_notification(message: Message):
+    """Bot yuborgan xabarnomaga javob (Reply) yozilganda, uni shaxsiy akkauntdan yetkazish"""
     replied_msg = message.reply_to_message
     target_sender_id = userbot.get_sender_for_notification(replied_msg.message_id)
     if target_sender_id:
         reply_text = message.text.strip() if message.text else ""
         if not reply_text:
-            await message.reply("❗ Iltimos, jo'natish uchun matnli xabar yozing.")
             return
 
         success = await userbot.send_direct_message(target_sender_id, reply_text)
@@ -483,99 +724,22 @@ async def handle_reply_to_notification(message: Message):
                 parse_mode="Markdown"
             )
         else:
-            await message.reply("❌ Xabar jo'natishda xatolik yuz berdi. Userbot faol ekanligini tekshiring.")
-        return
-
-@router.message(Command("reply"))
-async def handle_direct_reply(message: Message):
-    """Shaxsiy Telegram akkaunti nomidan belgilangan chat/shaxsga xabar yuborish"""
-    if message.from_user.id != config.CREATOR_ID:
-        return
-
-    args = message.text.split(maxsplit=2)
-    if len(args) < 3:
-        await message.reply("❗ Format: `/reply <user_id yoki @username> <xabar matni>`\nMisol: `/reply 1234567 Salom, yaxshimisiz?`", parse_mode="Markdown")
-        return
-
-    target = args[1].strip()
-    reply_text = args[2].strip()
-    target_id = int(target) if (target.isdigit() or target.startswith("-")) else target
-
-    success = await userbot.send_direct_message(target_id, reply_text)
-    if success:
-        await message.reply(f"✅ Shaxsiy Telegram akkauntingiz nomidan `{target}` ga xabar yuborildi!", parse_mode="Markdown")
-    else:
-        await message.reply(f"❌ Xabar yuborishda xatolik. Shaxsiy akkaunt (Userbot) ulanganini tekshiring: /agent")
-
-# ----------------- YARATUVCHI (CREATOR / ADMIN) PANEL -----------------
-
-@router.message(Command("admin"))
-async def handle_admin(message: Message):
-    if message.from_user.id != config.CREATOR_ID:
-        await message.reply("⛔ Kechirasiz, bu buyruq faqat bot yaratuvchisi uchun!")
-        return
-
-    stats = db.get_stats()
-    text = (
-        "👑 **Yaratuvchi Boshqaruv Paneli**\n\n"
-        f"👤 **Yaratuvchi ID:** `{config.CREATOR_ID}`\n"
-        f"👥 **Jami foydalanuvchilar:** {stats['total_users']}\n"
-        f"👥 **Guruhlar:** {stats['total_groups']}\n"
-        f"📢 **Kanallar:** {stats['total_channels']}\n\n"
-        "🛠 **Boshqaruv buyruqlari:**\n"
-        "🤖 `/agent` — Shaxsiy AI Agent (Kotib) boshqaruv paneli\n"
-        "💬 `/reply <ID/@username> <matn>` — Shaxsiy akkauntingiz nomidan xabar yozish\n"
-        "🔹 `/send <ID/@username> <matn>` — Belgilangan odamga/guruhga bot nomidan xabar yuborish\n"
-        "🔹 `/broadcast <matn>` — Barcha bot foydalanuvchilari va guruhlariga e'lon yuborish\n"
-        "🔹 `/chats` — Bot a'zo bo'lgan barcha guruh va kanallar ro'yxati\n"
-        "🔹 `/post <chat_id> <matn>` — Belgilangan kanalga post joylash\n"
-        "🔹 `/pin` — Guruhda reply qilingan xabarni qadab qo'yish\n"
-    )
-    await message.answer(text, parse_mode="Markdown")
-
-@router.message(Command("send"))
-async def handle_send_message(message: Message, bot: Bot):
-    """Yaratuvchi xohlagan shaxsga yoki chatga bot orqali xabar yuborishi"""
-    if message.from_user.id != config.CREATOR_ID:
-        return
-
-    args = message.text.split(maxsplit=2)
-    if len(args) < 3:
-        await message.reply("❗ Format noto'g'ri.\nFoydalanish: `/send <ID yoki @username> <xabar matni>`\nMisol: `/send 1234567 Salom!`", parse_mode="Markdown")
-        return
-
-    target = args[1].strip()
-    msg_text = args[2].strip()
-
-    try:
-        # ID raqam yoki username bo'lishi mumkin
-        chat_target = int(target) if (target.isdigit() or target.startswith("-")) else target
-        await bot.send_message(chat_id=chat_target, text=msg_text)
-        await message.reply(f"✅ Xabar muvaffaqiyatli yuborildi: `{target}`", parse_mode="Markdown")
-    except Exception as e:
-        await message.reply(f"❌ Xatolik yuz berdi: {e}")
+            await message.reply("❌ Xabar jo'natishda xatolik yuz berdi.")
 
 @router.message(Command("broadcast"))
 async def handle_broadcast(message: Message, bot: Bot):
     """Barcha a'zolarga va guruhlarga e'lon tarqatish"""
-    if message.from_user.id != config.CREATOR_ID:
-        return
-
     args = message.text.split(maxsplit=1)
     if len(args) < 2:
-        await message.reply("❗ Format: `/broadcast <xabar matni>`", parse_mode="Markdown")
+        await message.reply("Format: `/broadcast <xabar matni>`", parse_mode="Markdown")
         return
 
     broadcast_text = args[1].strip()
     users = db.get_users()
     chats = db.get_chats()
-
-    sent_count = 0
-    fail_count = 0
-
+    sent_count, fail_count = 0, 0
     status_msg = await message.reply("⏳ Xabar tarqatilmoqda...")
 
-    # Shaxsiy foydalanuvchilarga yuborish
     for uid in users.keys():
         try:
             await bot.send_message(chat_id=int(uid), text=broadcast_text)
@@ -583,7 +747,6 @@ async def handle_broadcast(message: Message, bot: Bot):
         except Exception:
             fail_count += 1
 
-    # Guruh va kanallarga yuborish
     for cid in chats.keys():
         try:
             await bot.send_message(chat_id=int(cid), text=broadcast_text)
@@ -592,71 +755,55 @@ async def handle_broadcast(message: Message, bot: Bot):
             fail_count += 1
 
     await status_msg.edit_text(
-        f"📢 **E'lon yakunlandi!**\n\n"
-        f"✅ Yuborildi: {sent_count}\n"
-        f"❌ Yetib bormadi (bloklangan/o'chirilgan): {fail_count}",
+        f"📢 **E'lon yakunlandi!**\n\n✅ Yuborildi: {sent_count}\n❌ Yetib bormadi: {fail_count}",
         parse_mode="Markdown"
     )
-
-@router.message(Command("chats"))
-@router.message(Command("channels"))
-async def handle_list_chats(message: Message):
-    """Ulangan guruh va kanallar ro'yxati"""
-    if message.from_user.id != config.CREATOR_ID:
-        return
-
-    chats = db.get_chats()
-    if not chats:
-        await message.reply("Hozircha bot hech qanday guruh yoki kanalga qo'shilmagan.\nBotni guruh yoki kanalingizga admin qilib qo'shing!")
-        return
-
-    lines = ["📋 **Bot a'zo bo'lgan guruh va kanallar:**\n"]
-    for cid, info in chats.items():
-        title = info.get("title", "Nomsiz")
-        ctype = info.get("type", "chat")
-        uname = f"(@{info['username']})" if info.get("username") else ""
-        lines.append(f"• **{title}** {uname}\n  ID: `{cid}` | Turi: {ctype}")
-
-    await message.reply("\n".join(lines), parse_mode="Markdown")
 
 @router.message(Command("post"))
 async def handle_post_to_channel(message: Message, bot: Bot):
     """Kanalga post joylash"""
-    if message.from_user.id != config.CREATOR_ID:
-        return
-
     args = message.text.split(maxsplit=2)
     if len(args) < 3:
-        await message.reply("❗ Format: `/post <kanal_id yoki @username> <matn>`\nMisol: `/post -100123456789 Yangi post matni`", parse_mode="Markdown")
+        await message.reply("Format: `/post <kanal_id yoki @username> <matn>`", parse_mode="Markdown")
         return
-
     target = args[1].strip()
     content = args[2].strip()
-
     try:
         chat_target = int(target) if (target.isdigit() or target.startswith("-")) else target
         await bot.send_message(chat_id=chat_target, text=content, parse_mode="Markdown")
         await message.reply(f"✅ Kanalga post joylandi: `{target}`", parse_mode="Markdown")
     except Exception as e:
-        await message.reply(f"❌ Kanalga post joylashda xatolik: {e}\n(Bot kanalga admin qilib qo'shilganini tekshiring)")
+        await message.reply(f"❌ Kanalga post joylashda xatolik: {e}")
 
 @router.message(Command("pin"))
 async def handle_pin_message(message: Message, bot: Bot):
-    """Guruhda xabarni qadash"""
-    if message.from_user.id != config.CREATOR_ID:
-        return
-
+    """Xabarni qadash"""
     if not message.reply_to_message:
-        await message.reply("❗ Xabarni qadash uchun o'sha xabarga reply qilib /pin deb yozing.")
+        await message.reply("Xabarni qadash uchun o'sha xabarga reply qilib /pin yozing.")
         return
-
     try:
         await bot.pin_chat_message(chat_id=message.chat.id, message_id=message.reply_to_message.message_id)
         await message.reply("📌 Xabar qadab qo'yildi!")
     except Exception as e:
         await message.reply(f"❌ Xatolik: {e}")
 
-# ----------------- OVOZLI XABARLAR (VOICE & AUDIO) -----------------
+# ----------------- GURUHLARDA ISHLASH VA /ai BUYRUG'I -----------------
+
+@router.message(Command("ai"))
+@router.message(Command("ask"))
+async def handle_ai_command(message: Message):
+    """Guruhda yoki shaxsiy chatda AI ga to'g'ridan-to'g'ri savol berish"""
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.reply("Savolingizni yozing: `/ai O'zbekiston poytaxti qaysi?`", parse_mode="Markdown")
+        return
+
+    question = parts[1].strip()
+    await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+    ai_reply = await gemini.generate_response(user_id=message.chat.id, user_message=question)
+    await safe_reply(message, ai_reply)
+
+# ----------------- OVOZLI VA MEDIA XABARLAR -----------------
 
 @router.message(F.voice | F.audio)
 async def handle_voice(message: Message):
@@ -664,38 +811,28 @@ async def handle_voice(message: Message):
     user_id = message.from_user.id
     db.register_user(user_id, message.from_user.full_name, message.from_user.username)
 
-    # Foydalanuvchiga ovoz yozilayotganini bildirish
     await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.RECORD_VOICE)
 
-    # Ovoz faylini xotiraga yuklab olish
     voice_obj = message.voice if message.voice else message.audio
     file_io = io.BytesIO()
     await message.bot.download(voice_obj, destination=file_io)
     audio_bytes = file_io.getvalue()
-
     mime_type = "audio/ogg" if message.voice else "audio/mp3"
 
-    # 1. Gemini AI orqali ovozni eshitib javob olish
     ai_reply = await gemini.process_audio(user_id=user_id, audio_bytes=audio_bytes, mime_type=mime_type)
 
-    # 2. AI javobini ovozga (TTS) aylantirish
     try:
         voice_bytes = await synthesize_voice(ai_reply)
         voice_file = BufferedInputFile(voice_bytes, filename="reply.ogg")
-        
-        # Ovozli xabar va matnli nusxasini jo'natamiz
         caption = ai_reply if len(ai_reply) <= 1000 else ai_reply[:1000] + "..."
         await message.reply_voice(voice=voice_file, caption=caption)
     except Exception as e:
         logger.error(f"Ovoz jo'natishda xatolik: {e}")
-        # Agar TTS xato bersa, matnli javob qaytaramiz
         await safe_reply(message, f"🗣 {ai_reply}")
-
-# ----------------- RASMLAR (PHOTOS) -----------------
 
 @router.message(F.photo)
 async def handle_photo(message: Message):
-    """Foydalanuvchi yuborgan rasmni qabul qilish va tahlil qilish"""
+    """Foydalanuvchi yuborgan rasmni tahlil qilish"""
     user_id = message.from_user.id
     db.register_user(user_id, message.from_user.full_name, message.from_user.username)
 
@@ -714,27 +851,45 @@ async def handle_photo(message: Message):
 # ----------------- MATNLI XABARLAR (TEXT) -----------------
 
 @router.message(F.text)
-async def handle_text(message: Message):
+async def handle_text(message: Message, bot: Bot):
     """Foydalanuvchi matnli xabarlarini qayta ishlash"""
-    user_id = message.from_user.id
     user_text = message.text.strip()
+    is_private = (message.chat.type == "private")
 
-    # Chat turini ro'yxatga olish (guruh/kanal bo'lsa)
-    if message.chat.type != "private":
+    # Agar guruh yoki kanal bo'lsa
+    if not is_private:
         db.register_chat(
             chat_id=message.chat.id,
-            title=message.chat.title or "Nomsiz guruh",
+            title=message.chat.title or "Guruh",
             chat_type=message.chat.type,
             username=message.chat.username
         )
+        
+        # Botga to'g'ridan-to'g'ri murojaat qilinganini tekshiramiz:
+        # 1. Bot nomiga Reply qilingan bo'lsa
+        # 2. Xabarda bot username-i bo'lsa (@bot)
+        bot_info = await bot.get_me()
+        bot_username = f"@{bot_info.username}".lower()
+        
+        is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == bot_info.id)
+        is_mentioned = bot_username in user_text.lower()
 
-    db.register_user(user_id, message.from_user.full_name, message.from_user.username)
+        if is_reply_to_bot or is_mentioned:
+            clean_text = user_text.lower().replace(bot_username, "").strip()
+            if not clean_text:
+                clean_text = "Salom, qanday yordam bera olaman?"
+            await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+            ai_reply = await gemini.generate_response(user_id=message.chat.id, user_message=clean_text)
+            await safe_reply(message, ai_reply)
+        return
+
+    # Shaxsiy chat (Private)
+    db.register_user(message.from_user.id, message.from_user.full_name, message.from_user.username)
 
     if user_text.startswith("/"):
         await message.reply("Noma'lum buyruq. Yordam uchun /help deb yozing.")
         return
 
-    await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-
-    ai_reply = await gemini.generate_response(user_id=user_id, user_message=user_text)
+    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+    ai_reply = await gemini.generate_response(user_id=message.from_user.id, user_message=user_text)
     await safe_reply(message, ai_reply)

@@ -1,10 +1,13 @@
 import asyncio
 import time
 import logging
-from typing import Optional, Dict
+import re
+from typing import Optional, Dict, List, Any
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.tl.types import User
+from telethon.tl.types import User, Channel, Chat
+from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
+from telethon.tl.functions.messages import ImportChatInviteRequest
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import config
@@ -12,6 +15,12 @@ from db_manager import db
 from gemini_service import GeminiService
 
 logger = logging.getLogger(__name__)
+
+# Keraksiz bir martalik reaksiyalar va filler so'zlar
+TRIVIAL_WORDS = {
+    "ok", "xo'p", "hop", "xop", "ha", "xa", "yo'q", "yoq", "rahmat", "raxmat", "tushundim",
+    "+", ".", "..", "...", "👍", "👌", "🤝", "🙏", "❤️", "😊", "😂", "hm", "hmm"
+}
 
 class UserbotService:
     def __init__(self, gemini_service: Optional[GeminiService] = None):
@@ -22,7 +31,16 @@ class UserbotService:
         self.me_username: Optional[str] = None
         self.me_name: Optional[str] = None
         self.is_running = False
-        self._last_reply_times: Dict[int, float] = {}
+        
+        # Har bir chat bo'yicha suhbat tarixi va salomlashish holati
+        self._chat_histories: Dict[int, List[Dict[str, str]]] = {}
+        self._greeted_senders: Dict[int, float] = {}
+        self._last_owner_outgoing: Dict[int, float] = {}
+        
+        # Ketma-ket kelgan xabarlarni bitta qilib olish (Debounce / Message Batching)
+        self._pending_buffers: Dict[int, List[str]] = {}
+        self._buffer_tasks: Dict[int, asyncio.Task] = {}
+        
         # Bot xabarnomalari ID si orqali kim yozganini topish xaritasi
         self.notification_map: Dict[int, int] = {}
 
@@ -36,7 +54,7 @@ class UserbotService:
     async def start(self) -> bool:
         """Userbot (Telethon) mijozini ishga tushirish"""
         if not config.is_userbot_configured():
-            logger.info("Userbot sozlanmagan (TELEGRAM_API_ID, TELEGRAM_API_HASH yoki TELEGRAM_STRING_SESSION kiritilmagan).")
+            logger.info("Userbot sozlanmagan (TELEGRAM_STRING_SESSION kiritilmagan).")
             return False
 
         try:
@@ -45,9 +63,9 @@ class UserbotService:
                 session,
                 config.TELEGRAM_API_ID,
                 config.TELEGRAM_API_HASH,
-                device_model="AI Agent Assistant",
+                device_model="AI Personal Assistant",
                 system_version="Linux/Windows",
-                app_version="1.0"
+                app_version="2.0"
             )
 
             await self.client.connect()
@@ -62,9 +80,8 @@ class UserbotService:
             self.me_name = f"{me.first_name or ''} {me.last_name or ''}".strip()
             self.is_running = True
 
-            logger.info(f"✅ Userbot AI Agent muvaffaqiyatli ulandi: {self.me_name} (@{self.me_username} / ID: {self.me_id})")
+            logger.info(f"✅ Userbot AI Agent ulandi: {self.me_name} (@{self.me_username} / ID: {self.me_id})")
 
-            # Xabarlarni tinglash handlerini ro'yxatdan o'tkazamiz
             self._register_handlers()
             return True
 
@@ -74,15 +91,43 @@ class UserbotService:
             return False
 
     def _register_handlers(self):
-        """Telethon voqealarini (events) ro'yxatdan o'tkazish"""
+        """Telethon voqealarini ro'yxatdan o'tkazish"""
+        # Egasi (Azizbek) shaxsan o'zi xabar yozganda - o'sha chatda AI aralashmasligi uchun belgilaymiz
+        @self.client.on(events.NewMessage(outgoing=True, func=lambda e: e.is_private))
+        async def outgoing_message_tracker(event: events.NewMessage.Event):
+            self._last_owner_outgoing[event.chat_id] = time.time()
+
+        # Lichkaga kelgan kiruvchi xabarlar
         @self.client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
         async def incoming_private_message_handler(event: events.NewMessage.Event):
-            await self._handle_private_message(event)
+            await self._buffer_incoming_message(event)
 
-    async def _handle_private_message(self, event: events.NewMessage.Event):
-        """Shaxsiy chatga (lichkaga) kelgan yangi xabarni qayta ishlash"""
+    def _is_message_relevant(self, text: str) -> bool:
+        """Xabar chindan ham AI javobiga loyiqmi yoki shunchaki fon / emoji / bir martalik so'zmi?"""
+        cleaned = text.strip().lower()
+        if not cleaned:
+            return False
+        # Faqat 1-2 ta belgidan iborat yoki keraksiz filler bo'lsa
+        if cleaned in TRIVIAL_WORDS:
+            return False
+        # Agar faqat bitta emoji yoki belgi bo'lsa
+        if len(cleaned) <= 2 and not cleaned.isalnum():
+            return False
+        # Xizmat ko'rsatish parollari (SMS kodlar)
+        if re.search(r"\b\d{4,6}\b", cleaned) and any(w in cleaned for w in ["kod", "code", "parol", "password"]):
+            return False
+        return True
+
+    async def _buffer_incoming_message(self, event: events.NewMessage.Event):
+        """
+        Bir nechta xabarlarni bitta qilib to'plash (Debouncing).
+        Masalan, foydalanuvchi 3 soniya ichida 3 ta xabar yozsa:
+        1. Salom
+        2. Ishlar qalay
+        3. Bir savolim bor edi
+        Ular bitta matnga jamlanadi va bitta javob qaytariladi.
+        """
         try:
-            # 1. AI agent yoqilganligini tekshirish
             if not db.is_agent_enabled():
                 return
 
@@ -90,55 +135,94 @@ class UserbotService:
             if not isinstance(sender, User):
                 return
 
-            # O'zimizga o'zimiz yoki botlarga javob bermaymiz
             if sender.id == self.me_id or sender.bot or sender.is_self:
                 return
 
-            # Qora ro'yxat tekshiruvi
             if db.is_blacklisted(sender.id):
                 return
 
-            # Xabar matni
-            message_text = event.raw_text.strip() if event.raw_text else ""
-            if not message_text and event.voice:
-                message_text = "[Ovozli xabar yuborildi]"
-            elif not message_text and event.media:
-                message_text = "[Media fayl yuborildi]"
-
-            if not message_text:
+            # Agar egasi shu chatda yaqinda (oxirgi 2 daqiqada) o'zi javob yozgan bo'lsa, AI aralashmaydi
+            last_manual = self._last_owner_outgoing.get(sender.id, 0)
+            if time.time() - last_manual < 120:
+                logger.info(f"Egasi {sender.id} bilan shaxsan yozishmoqda, AI to'xtatildi.")
                 return
 
-            # Ketma-ket spamni oldini olish (oxirgi 20 soniya ichida javob berilgan bo'lsa kutish)
-            now = time.time()
-            last_time = self._last_reply_times.get(sender.id, 0)
-            if now - last_time < 20:
-                logger.info(f"Foydalanuvchi {sender.id} uchun cooldown faol, javob o'tkazib yuborildi.")
+            msg_text = event.raw_text.strip() if event.raw_text else ""
+            if not msg_text and event.voice:
+                msg_text = "[Ovozli xabar]"
+            elif not msg_text and event.media:
+                msg_text = "[Media fayl]"
+
+            # Aqlli filtr
+            if db.is_smart_filter_enabled() and not self._is_message_relevant(msg_text):
+                logger.info(f"Keraksiz/filler xabar o'tkazib yuborildi: '{msg_text}'")
                 return
 
-            self._last_reply_times[sender.id] = now
+            # Buferga qo'shish
+            buf = self._pending_buffers.setdefault(sender.id, [])
+            buf.append(msg_text)
+
+            # Agar eski taymer bo'lsa, bekor qilamiz (chunki yangi xabar keldi)
+            if sender.id in self._buffer_tasks and not self._buffer_tasks[sender.id].done():
+                self._buffer_tasks[sender.id].cancel()
+
+            # Yangi 3.5 soniyalik kechikish taymeri o'rnatamiz
+            self._buffer_tasks[sender.id] = asyncio.create_task(
+                self._process_buffered_messages(sender, event.chat_id)
+            )
+
+        except Exception as e:
+            logger.error(f"Xabarni buferlashda xatolik: {e}")
+
+    async def _process_buffered_messages(self, sender: User, chat_id: int):
+        """Kechikishdan so'ng to'plangan xabarlarni Gemini orqali qayta ishlash"""
+        try:
+            await asyncio.sleep(3.5)
+            messages = self._pending_buffers.pop(sender.id, [])
+            if not messages:
+                return
+
+            combined_message = "\n".join(messages).strip()
             sender_name = f"{sender.first_name or ''} {sender.last_name or ''}".strip() or "Foydalanuvchi"
 
-            # Yozilayotgan holatni bildirish (typing)
-            async with self.client.action(event.chat_id, "typing"):
-                await asyncio.sleep(2)
-                # Gemini orqali aqlli javob olish
+            # Salomlashilganligini tekshirish (oxirgi 6 soat ichida salom berilgan bo'lsa - qayta salom yo'q)
+            last_greeted = self._greeted_senders.get(sender.id, 0)
+            now = time.time()
+            already_greeted = (now - last_greeted < 21600) or (sender.id in self._chat_histories and len(self._chat_histories[sender.id]) > 0)
+
+            # Typing animatsiyasi
+            async with self.client.action(chat_id, "typing"):
                 agent_prompt = db.get_agent_prompt()
                 agent_mode = db.get_agent_mode()
-                owner_info = db.get_owner_info()
+                persona = db.get_persona()
+                history = self._chat_histories.get(sender.id, [])
+
                 ai_reply = await self.gemini.generate_agent_reply(
                     sender_name=sender_name,
-                    message_text=message_text,
+                    message_text=combined_message,
                     custom_prompt=agent_prompt,
                     mode=agent_mode,
-                    owner_info=owner_info
+                    owner_info=persona.get("about_me", ""),
+                    chat_history=history,
+                    already_greeted=already_greeted,
+                    persona=persona
                 )
 
-            # Javobni shaxsiy chatga jo'natish
-            await event.reply(ai_reply)
+            # Javobni shaxsiy chatga yuborish
+            await self.client.send_message(chat_id, ai_reply)
             db.increment_agent_stat()
+            self._greeted_senders[sender.id] = now
+
+            # Suhbat tarixini saqlab qo'yish (keyingi xabarlarda AI kontekstni bilishi uchun)
+            if sender.id not in self._chat_histories:
+                self._chat_histories[sender.id] = []
+            self._chat_histories[sender.id].append({"role": "user", "text": combined_message})
+            self._chat_histories[sender.id].append({"role": "model", "text": ai_reply})
+            self._chat_histories[sender.id] = self._chat_histories[sender.id][-8:]
+
             logger.info(f"AI Agent {sender_name} ga javob qaytardi: {ai_reply[:40]}...")
 
-            # Telegram Bot orqali egasiga xabarnoma jo'natish
+            # Egasiga (Bot orqali) xabarnoma jo'natish
             if self.bot_instance and config.CREATOR_ID:
                 uname = f"@{sender.username}" if sender.username else "mavjud emas"
                 mode_label = "👤 Sizning nomingizdan" if agent_mode == "as_me" else "🤖 AI Kotib sifatida"
@@ -146,13 +230,13 @@ class UserbotService:
                     "📩 **[Lichka Xabarnomasi]**\n\n"
                     f"👤 **Kimdan:** {sender_name} ({uname})\n"
                     f"🆔 **ID:** `{sender.id}`\n"
-                    f"💬 **Xabar:** {message_text}\n"
+                    f"💬 **Xabar:**\n{combined_message}\n\n"
                     f"✨ **AI Javobi ({mode_label}):**\n_{ai_reply}_\n\n"
-                    f"💡 *Sizning nomingizdan javob yozish uchun: ushbu xabarga shunchaki Reply (Ответить) qilib yozing!*"
+                    f"💡 *Javob yozish uchun: ushbu xabarga Reply (Ответить) qilib yozing!*"
                 )
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [
-                        InlineKeyboardButton(text="🚫 Bloklash (Ignore)", callback_data=f"agent_block_{sender.id}")
+                        InlineKeyboardButton(text="🚫 Bloklash (Qora ro'yxat)", callback_data=f"agent_block_{sender.id}")
                     ]
                 ])
                 try:
@@ -166,11 +250,93 @@ class UserbotService:
                 except Exception as e:
                     logger.error(f"Xabarnoma jo'natishda xatolik: {e}")
 
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
-            logger.error(f"Lichka xabarini qayta ishlashda xatolik: {e}")
+            logger.error(f"Buferlangan xabarlarni qayta ishlashda xatolik: {e}")
 
-    async def send_direct_message(self, target_id: int | str, text: str) -> bool:
-        """Shaxsiy akkaunt nomidan to'g'ridan-to'g'ri xabar yuborish"""
+    # ---------------- TELEGRAM AKKAUNTINI BOSHQARISH FUNKSIYALARI ----------------
+
+    async def get_dialogs_list(self, filter_type: str = "all", limit: int = 25) -> List[Dict[str, Any]]:
+        """Akkauntdagi guruhlar, kanallar, botlar va chatlar ro'yxatini olish"""
+        if not self.is_running or not self.client:
+            return []
+
+        result = []
+        try:
+            async for dialog in self.client.iter_dialogs(limit=limit):
+                entity = dialog.entity
+                d_type = "user"
+                username = getattr(entity, "username", None) or ""
+                title = dialog.name or "Nomsiz"
+
+                if dialog.is_channel:
+                    d_type = "channel"
+                elif dialog.is_group:
+                    d_type = "group"
+                elif getattr(entity, "bot", False):
+                    d_type = "bot"
+
+                if filter_type != "all" and d_type != filter_type:
+                    continue
+
+                result.append({
+                    "id": dialog.id,
+                    "title": title,
+                    "type": d_type,
+                    "username": username,
+                    "unread_count": dialog.unread_count
+                })
+        except Exception as e:
+            logger.error(f"Dialoglarni olishda xatolik: {e}")
+        return result
+
+    async def get_chat_history_text(self, target: Any, limit: int = 15) -> str:
+        """Istalgan guruh, kanal yoki chatdan so'nggi xabarlarni o'qish"""
+        if not self.is_running or not self.client:
+            return "Userbot ulanmagan."
+
+        try:
+            messages = []
+            async for msg in self.client.iter_messages(target, limit=limit):
+                if not msg.text:
+                    continue
+                sender_name = "Noma'lum"
+                if msg.sender:
+                    sender_name = getattr(msg.sender, "first_name", "") or getattr(msg.sender, "title", "Chat")
+                messages.append(f"[{sender_name}]: {msg.text}")
+
+            messages.reverse()
+            return "\n".join(messages) if messages else "Chatda matnli xabarlar topilmadi."
+        except Exception as e:
+            logger.error(f"Chat tarixini o'qishda xatolik: {e}")
+            return f"Xatolik: {e}"
+
+    async def interact_with_bot(self, bot_username: str, command: str) -> str:
+        """Boshqa Telegram botga buyruq yoki xabar yuborib, uning javobini qabul qilish"""
+        if not self.is_running or not self.client:
+            return "Userbot ulanmagan."
+
+        try:
+            bot_entity = await self.client.get_input_entity(bot_username)
+            sent_msg = await self.client.send_message(bot_entity, command)
+            
+            # Botning javobini 6 soniya kutamiz
+            await asyncio.sleep(4)
+            replies = []
+            async for msg in self.client.iter_messages(bot_entity, limit=3):
+                if msg.id > sent_msg.id and msg.text:
+                    replies.append(msg.text)
+
+            if replies:
+                return "\n\n".join(reversed(replies))
+            return f"@{bot_username} ga '{command}' yuborildi, ammo javob kelmadi yoki javob matnsiz."
+        except Exception as e:
+            logger.error(f"Bot bilan muloqotda xatolik: {e}")
+            return f"Xatolik yuz berdi: {e}"
+
+    async def send_direct_message(self, target_id: Any, text: str) -> bool:
+        """Shaxsiy akkaunt nomidan xabar yuborish"""
         if not self.is_running or not self.client:
             return False
         try:
@@ -180,6 +346,30 @@ class UserbotService:
             logger.error(f"Xabar yuborishda xatolik: {e}")
             return False
 
+    async def join_chat(self, link_or_username: str) -> str:
+        """Guruh yoki kanalga a'zo bo'lish"""
+        if not self.is_running or not self.client:
+            return "Userbot ulanmagan."
+        try:
+            if "t.me/+" in link_or_username or "joinchat" in link_or_username:
+                hash_val = link_or_username.split("+")[-1].split("/")[-1]
+                await self.client(ImportChatInviteRequest(hash_val))
+            else:
+                await self.client(JoinChannelRequest(link_or_username))
+            return f"✅ '{link_or_username}' ga muvaffaqiyatli qo'shildingiz!"
+        except Exception as e:
+            return f"❌ Qo'shilishda xatolik: {e}"
+
+    async def leave_chat(self, chat_id: Any) -> str:
+        """Guruh yoki kanaldan chiqish"""
+        if not self.is_running or not self.client:
+            return "Userbot ulanmagan."
+        try:
+            await self.client(LeaveChannelRequest(chat_id))
+            return f"✅ `{chat_id}` dan muvaffaqiyatli chiqildi!"
+        except Exception as e:
+            return f"❌ Chiqishda xatolik: {e}"
+
     async def stop(self):
         """Userbotni to'xtatish"""
         if self.client and self.client.is_connected():
@@ -188,7 +378,6 @@ class UserbotService:
             logger.info("Userbot to'xtatildi.")
 
     def get_status(self) -> dict:
-        """Holat ma'lumotlarini qaytarish"""
         return {
             "configured": config.is_userbot_configured(),
             "connected": self.is_running,

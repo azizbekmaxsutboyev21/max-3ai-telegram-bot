@@ -78,7 +78,6 @@ class GeminiService:
             model_name = self.fallback_models[self._current_model_idx % len(self.fallback_models)]
 
             try:
-                # Bloklanmaslik uchun alohida thread'da bajaramiz
                 response = await asyncio.to_thread(call_factory, client, model_name)
                 if response and response.text:
                     return response.text.strip()
@@ -103,38 +102,32 @@ class GeminiService:
                     continue
 
                 if is_quota:
-                    # Kvota tugaganda: keyingi API kalitga o'tamiz
                     self._rotate_key()
-                    # Agar bir nechta kalit bo'lmasa, zaxira modelga o'tamiz (har modelning o'z kvotasi bor)
                     if len(self.api_keys) <= 1:
                         self._rotate_model()
                     await asyncio.sleep(1.0)
                     continue
 
                 if is_503:
-                    # 503 UNAVAILABLE (High demand) holatida zaxira modelga o'tamiz va biroz kutamiz
                     self._rotate_model()
                     delay = 1.0 * attempt
                     await asyncio.sleep(delay)
                     continue
 
-                # Boshqa kutilmagan xatolik bo'lsa biroz kutib qayta urinish
                 await asyncio.sleep(1.0)
 
-        # Barcha urinishlar tugaganda ham xatolik yuz bersa, foydalanuvchiga madaniyatli javob berish
         logger.error(f"Gemini {operation_name} barcha urinishlardan so'ng ishlamadi. Oxirgi xato: {last_error}")
         if "503" in last_error or "UNAVAILABLE" in last_error:
-            return "⚠️ AI serverlarida ayni paytda juda yuqori yuklanish kuzatilmoqda. Iltimos, 1-2 daqiqadan so'ng qayta yozib ko'ring."
+            return "⚠️ AI serverlarida ayni paytda yuqori yuklanish kuzatilmoqda. 1-2 daqiqadan so'ng qayta yozing."
         elif "429" in last_error or "quota" in last_error.lower() or "RESOURCE_EXHAUSTED" in last_error:
-            return "⚠️ API so'rovlar limiti (kvotasi) vaqtinchalik to'ldi. Iltimos, bir necha daqiqadan so'ng qayta urinib ko'ring."
+            return "⚠️ API so'rovlar limiti vaqtinchalik to'ldi. Birozdan so'ng qayta urinib ko'ring."
         else:
-            return "⚠️ Server bilan ulanishda vaqtinchalik xatolik yuz berdi. Iltimos, birozdan so'ng qayta urinib ko'ring."
+            return "⚠️ Server bilan ulanishda vaqtinchalik xatolik yuz berdi."
 
     async def generate_response(self, user_id: int, user_message: str) -> str:
-        """Foydalanuvchi matnli xabariga AI javobini olish (non-blocking, sliding window chat history)"""
+        """Foydalanuvchi matnli xabariga AI javobini olish"""
         try:
             history = self._user_histories.get(user_id, [])
-            # Tokenlar va limitlarni tejash uchun oxirgi 12 ta xabarni olamiz
             trimmed_history = history[-12:]
 
             new_turn = types.Content(
@@ -155,7 +148,6 @@ class GeminiService:
 
             reply = await self._execute_with_resilience("Chat so'rovi", _call)
 
-            # Agar javob muvaffaqiyatli olingan bo'lsa, uni suhbat tarixiga yozamiz
             if not reply.startswith("⚠️"):
                 trimmed_history.append(new_turn)
                 trimmed_history.append(types.Content(
@@ -170,7 +162,7 @@ class GeminiService:
             return "⚠️ Xatolik yuz berdi. Iltimos, birozdan so'ng qayta urinib ko'ring."
 
     async def analyze_image(self, user_id: int, image_bytes: bytes, caption: Optional[str] = None) -> str:
-        """Foydalanuvchi yuborgan rasmni tahlil qilish (Multimodal, non-blocking)"""
+        """Foydalanuvchi yuborgan rasmni tahlil qilish"""
         try:
             image = Image.open(io.BytesIO(image_bytes))
             prompt = caption if caption else "Ushbu rasmni batafsil tasvirlab bering va undagi muhim ma'lumotlarni tahlil qiling."
@@ -188,16 +180,15 @@ class GeminiService:
             return await self._execute_with_resilience("Rasm tahlili", _call)
         except Exception as e:
             logger.error(f"Rasm tahlilida xatolik: {e}")
-            return "⚠️ Rasmni tahlil qilishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring."
+            return "⚠️ Rasmni tahlil qilishda xatolik yuz berdi."
 
     async def process_audio(self, user_id: int, audio_bytes: bytes, mime_type: str = "audio/ogg") -> str:
-        """Foydalanuvchi yuborgan ovozli xabarni eshitib, tushunib javob qaytarish (Multimodal Audio)"""
+        """Foydalanuvchi yuborgan ovozli xabarni eshitib javob berish"""
         try:
             audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
             prompt = (
                 "Foydalanuvchi sizga ovozli xabar (audio) yubordi. "
-                "Ovozni diqqat bilan tinglang, nima deyilganini to'liq tushuning va unga foydalanuvchi tilida (asosan o'zbek tilida) "
-                "aniq, to'liq, do'stona va ravon javob bering."
+                "Ovozni tinglab, unga o'zbek tilida aniq, to'liq, do'stona va ravon javob bering."
             )
 
             def _call(client: genai.Client, model: str):
@@ -213,7 +204,7 @@ class GeminiService:
             return await self._execute_with_resilience("Ovoz tahlili", _call)
         except Exception as e:
             logger.error(f"Ovozli xabarni tahlil qilishda xatolik: {e}")
-            return "⚠️ Ovozli xabarni eshitishda xatolik yuz berdi. Iltimos, qayta urinib ko'ring."
+            return "⚠️ Ovozli xabarni eshitishda xatolik yuz berdi."
 
     async def generate_agent_reply(
         self,
@@ -221,37 +212,83 @@ class GeminiService:
         message_text: str,
         custom_prompt: str,
         mode: str = "as_me",
-        owner_info: str = ""
+        owner_info: str = "",
+        chat_history: Optional[List[Dict[str, str]]] = None,
+        already_greeted: bool = False,
+        persona: Optional[Dict[str, str]] = None
     ) -> str:
-        """Shaxsiy Telegram akkaunti (Userbot AI Agent) nomidan kelgan xabarlarga aqlli javob qaytarish"""
+        """
+        Shaxsiy Telegram akkaunti (Userbot AI Kotib / Agent) nomidan kelgan xabarlarga aqlli javob qaytarish.
+        - Takroriy 'Salom' deyishning oldi olingan.
+        - Suhbat konteksti (tarixi) inobatga olinadi.
+        - Egasi shaxsiyatiga (persona) to'liq moslashadi.
+        """
         try:
+            persona = persona or {}
+            owner_name = persona.get("owner_name", "Azizbek")
+            about_me = persona.get("about_me", owner_info)
+            comm_style = persona.get("communication_style", "Samimiy, do'stona, madaniyatli va lo'nda.")
+            custom_rules = persona.get("custom_rules", "")
+
+            # Salomlashish cheklovi
+            greeting_rule = (
+                "🛑 QAT'IY QOIDA: Ushbu suhbatdosh bilan allaqachon salomlashilgan yoki suhbat davom etmoqda. "
+                "HECH QACHON 'Salom', 'Assalomu alaykum' yoki shunga o'xshash salom so'zlarini qayta ishlatmang! "
+                "To'g'ridan-to'g'ri masalaning o'ziga, savolga yoki mavzuga javob bering."
+            ) if already_greeted else (
+                "Agar bu yangi suhbatning eng birinchi xabari bo'lsa, qisqa xushmuomala salomlashishingiz mumkin. "
+                "Lekin agar salomlashish shart bo'lmasa, darhol javobga o'ting."
+            )
+
             if mode == "as_me":
                 instruction = (
-                    "Siz to'g'ridan-to'g'ri Telegram akkaunt egasisiz (Ismingiz: Azizbek). Siz o'zingiz nomingizdan gapirasiz!\n"
-                    f"Akkaunt egasi (siz) haqingizda ma'lumotlar:\n{owner_info}\n\n"
-                    f"Hozirgi holat va ko'rsatmalar:\n{custom_prompt}\n\n"
-                    f"Suhbatdosh ismi: {sender_name}.\n"
-                    "MUHIM QOIDALAR:\n"
-                    "- Birinchi shaxsda ('men', 'hozir bandman', 'ko'rib chiqaman', 'salom') gapiring.\n"
-                    "- Aslo o'zingizni bot, sun'iy intellekt yoki dastur deb atamang! Oddiy inson kabi tabiiy, do'stona va xushmuomala yozing.\n"
-                    "- Qisqa, lo'nda va insoniy yozing (1-2 jumla kifoya)."
+                    f"Siz to'g'ridan-to'g'ri Telegram akkaunt egasisiz (Ismingiz: {owner_name}). Siz o'z nomingizdan yozasiz!\n"
+                    f"Siz haqingizda ma'lumotlar:\n{about_me}\n"
+                    f"Muloqot uslubingiz: {comm_style}\n"
+                    f"Qo'shimcha ko'rsatmalar:\n{custom_rules}\n"
+                    f"Vaziyat / Holatingiz: {custom_prompt}\n"
+                    f"Suhbatdosh: {sender_name}.\n\n"
+                    f"{greeting_rule}\n\n"
+                    "MUHIM TALABLAR:\n"
+                    "1. Birinchi shaxsda ('men', 'hali ko'rib chiqaman', 'bo'shagach yozaman') gapiring.\n"
+                    "2. Aslo o'zingizni sun'iy intellekt, bot yoki kotib deb aytmang! Oddiy inson kabi tabiiy va jonli yozing.\n"
+                    "3. Xabarlarga 1-3 ta qisqa jumla bilan, Telegram chat uslubida javob bering (juda uzun bo'lmasin)."
                 )
             else:
                 instruction = (
-                    "Siz Telegram akkaunt egasining (Azizbekning) shaxsiy AI Kotibisiz (Agentisiz).\n"
-                    f"Egasi haqida ma'lumotlar:\n{owner_info}\n\n"
-                    f"Hozirgi ko'rsatmalar:\n{custom_prompt}\n\n"
-                    f"Suhbatdosh ismi: {sender_name}.\n"
-                    "MUHIM QOIDALAR:\n"
-                    "- Egasi hozir biroz bandligini va xabarni unga yetkazib qo'yishingizni ayting.\n"
-                    "- O'ta samimiy, xushmuomala va insoniy muloqot qiling.\n"
-                    "- Qisqa va lo'nda javob bering (1-2 jumla)."
+                    f"Siz Telegram akkaunt egasining ({owner_name}ning) shaxsiy AI Kotibisiz (Yordamchisisiz).\n"
+                    f"Egasi haqida ma'lumotlar:\n{about_me}\n"
+                    f"Uslub: {comm_style}\n"
+                    f"Ko'rsatmalar: {custom_rules}\n"
+                    f"Hozirgi holat: {custom_prompt}\n"
+                    f"Suhbatdosh: {sender_name}.\n\n"
+                    f"{greeting_rule}\n\n"
+                    "MUHIM TALABLAR:\n"
+                    "1. Egasi hozir biroz bandligini va xabarni unga yetkazib qo'yishingizni ayting.\n"
+                    "2. O'ta xushmuomala, madaniyatli va professional yordamchi sifatida muloqot qiling.\n"
+                    "3. Qisqa va aniq javob bering (1-2 jumla)."
                 )
+
+            # Tarixni Google GenAI Content formatiga keltirish
+            contents_list = []
+            if chat_history:
+                for item in chat_history[-6:]:
+                    role = "user" if item.get("role") == "user" else "model"
+                    contents_list.append(types.Content(
+                        role=role,
+                        parts=[types.Part.from_text(text=item.get("text", ""))]
+                    ))
+
+            # Hozirgi xabarni qo'shish
+            contents_list.append(types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=message_text)]
+            ))
 
             def _call(client: genai.Client, model: str):
                 return client.models.generate_content(
                     model=model,
-                    contents=message_text,
+                    contents=contents_list,
                     config=types.GenerateContentConfig(
                         system_instruction=instruction,
                         temperature=0.6,
@@ -260,8 +297,32 @@ class GeminiService:
 
             reply = await self._execute_with_resilience("Userbot agent javobi", _call)
             if reply.startswith("⚠️"):
-                return "Salom! Xabaringizni ko'rdim, bo'shashim bilanoq o'zim yozaman."
+                return "Xabaringizni ko'rdim, bo'shashim bilanoq o'zim yozaman."
             return reply
         except Exception as e:
             logger.error(f"AI Agent javob yaratishda xatolik: {e}")
-            return "Salom! Xabaringizni oldim, tez orada o'zim bog'lanaman."
+            return "Xabaringizni oldim, tez orada o'zim bog'lanaman."
+
+    async def summarize_chat_messages(self, chat_title: str, messages_text: str) -> str:
+        """Guruh, kanal yoki botdagi so'nggi xabarlarni tahlil qilish va konspektini berish"""
+        try:
+            prompt = (
+                f"Quyida '{chat_title}' Telegram chat/kanalidagi so'nggi xabarlar berilgan. "
+                "Ularni diqqat bilan o'rganib chiqib, o'zbek tilida eng muhim mavzular, yangiliklar va xulosalarni "
+                "chiroyli punktlar ko'rinishida qisqacha xulosa (konspekt) qilib bering:\n\n"
+                f"{messages_text}"
+            )
+
+            def _call(client: genai.Client, model: str):
+                return client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.4,
+                    )
+                )
+
+            return await self._execute_with_resilience("Chat konspekti", _call)
+        except Exception as e:
+            logger.error(f"Konspekt yaratishda xatolik: {e}")
+            return "Xabarlarni konspekt qilishda xatolik yuz berdi."

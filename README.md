@@ -1,113 +1,138 @@
-# 🤖 Telegram AI Bot (Google Gemini + Voice + Admin Panel)
+# 🤖 Telegram AI Bot & Shaxsiy AI Kotib (Google Gemini + Userbot + Voice)
 
-Telegram uchun zamonaviy, ovozli muloqot va yaratuvchi (admin) boshqaruviga ega **Aqlli AI Bot**.
+Telegram uchun yaratilgan zamonaviy, ovozli muloqot, to'liq shaxsiy akkaunt nazorati (Userbot) va interaktiv Admin paneliga ega universal **Aqlli AI Bot**.
 
 - **Bot username:** [@MAX_3AI_BOT](https://t.me/MAX_3AI_BOT)
-- **AI Modeli:** `Google Gemini 3.8 Flash`
+- **AI Modeli:** `Google Gemini 3.8 Flash / 3.5 Flash Lite`
 - **Ovoz moduli:** `Microsoft Edge Neural TTS (O'zbekcha: Sardor)`
-- **Kutubxona:** `aiogram 3` (Python 3.11 asinxron)
-- **Yaratuvchi (Creator ID):** `5772939710`
+- **Kutubxonalar:** `aiogram 3`, `telethon 1.38`, `google-genai`
+- **Platforma:** Oracle Cloud (VPS systemd), Render.com, Linux/Windows
 
 ---
 
-## ✨ Asosiy imkoniyatlar
+## ✨ Asosiy Imkoniyatlar va Yangiliklar
 
-### 1. 🎙 Ovozli muloqot (Voice In, Voice Out)
-- Foydalanuvchi botga Telegram orqali oddiy **ovozli xabar (Voice message)** yuborishi mumkin.
-- Gemini 3.8 Flash audio faylni eshitib, gapirilgan so'zlarni va ma'nosini to'liq tushunadi.
-- Bot javobni o'zbek tilida **tabiiy ovozda (audio ovozli xabar)** hamda matn ko'rinishida qaytaradi.
+### 1. 🎙 Ovozli va Multimodal muloqot
+- Foydalanuvchi oddiy **ovozli xabar (Voice)** yuborishi mumkin. AI uni tinglab, o'zbek tilida **tabiiy ovozda** javob qaytaradi.
+- Rasm yuborilganda undagi ma'lumotlarni tahlil qiladi va savollarga javob beradi.
 
-### 2. 👑 Yaratuvchi (Admin) Boshqaruv Paneli
-Faqat sizning Telegram hisobingiz (`ID: 5772939710`) uchun maxsus imkoniyatlar:
-- `/admin` — Boshqaruv paneli va statistikani ko'rish (a'zolar soni, ulanishlar).
-- `/send <ID/@username> <matn>` — Bot orqali istalgan shaxsga yoki guruhga xabar yuborish.
-- `/broadcast <matn>` — Botdan foydalangan barcha a'zolar va guruhlarga umumiy e'lon tarqatish.
-- `/chats` — Bot qo'shilgan barcha guruh va kanallar ro'yxati (ID va nomlari bilan).
-- `/post <kanal_id> <matn>` — Bot admin bo'lgan kanallarga avtomatik post chiqarish.
-- `/pin` — Guruhda reply qilingan xabarni darhol qadab qo'yish (pin).
+### 2. 🤖 Shaxsiy AI Kotib (Userbot) va Anti-Spam
+- **Takroriy salomlashish yo'qotildi:** AI bir suhbatdosh bilan har bir xabarda qayta-qayta "Salom" deb yozmaydi, to'g'ridan-to'g'ri mavzu bo'yicha tabiiy insondek gaplashadi.
+- **Xabarlarni birlashtirish (Debouncing):** Bir vaqtning o'zida kelgan ketma-ket xabarlarni bitta qilib jamlaydi va bitta umumiy mantiqiy javob qaytaradi.
+- **Aqlli filtr:** Keraksiz stikerlar, yagona emojilar, "ok", "+" kabi xabarlarga javob qaytarib spam qilmaydi.
+- **Egasi yozganda to'xtash:** Agar siz (Azizbek) shaxsan o'zingiz lichkada yozishayotgan bo'lsangiz, AI suhbatga xalaqit bermaydi.
 
-### 3. 👥 Guruhlar va Kanallarni nazorat qilish
-- Botni o'zingizning guruh yoki kanalingizga **Admin** qilib qo'shing.
-- Bot ulangan chatlarni avtomatik ro'yxatga oladi va sizga boshqaruv imkonini beradi.
+### 3. 🧠 Menga moslashish (Persona & Adaptation)
+- AI o'z-o'zidan sizning fe'l-atvoringiz, kasbingiz, muloqot uslubingiz va qoidalaringizga moslashadi.
+- `/adapt <matn>` orqali AI ga o'zingiz haqingizda yangi ma'lumotlar berishingiz mumkin.
 
-### 4. 🖼 Multimodal (Rasm tahlili) va Matn
-- Istalgan matnli savolga o'zbek tilida batafsil javob.
-- Rasmlarni tahlil qilish, masalalarni yechish va tasvirlash.
+### 4. 🚫 Qora ro'yxat (Blacklist) boshqaruvi
+- Keraksiz kishilar yoki spamerlarni qora ro'yxatga kiritish va chiqarish.
+- `/blacklist` — barcha bloklanganlarni ko'rish va bitta tugma bilan ro'yxatdan chiqarish.
+- `/block <user_id>` va `/unblock <user_id>` buyruqlari.
 
-### 5. 🤖 Shaxsiy Telegram AI Agent (Userbot / Shaxsiy Kotib)
-Bot sizning shaxsiy Telegram akkauntingizga ulanib, sizning shaxsiy AI Kotibingiz sifatida ishlaydi:
-- **Shaxsiy lichkaga avto-javob:** Siz band bo'lganingizda, shaxsiy lichkangizga kelgan xabarlarga AI sizning nomingizdan samimiy va aqlli javob qaytaradi.
-- **Botga xabarnoma:** Lichkaga kim nima yozgani va AI unga nima deb javob bergani darhol botingizga bildirishnoma sifatida keladi.
-- **Shaxsiy akkauntdan xabar yozish:** `/reply <user_id> <matn>` orqali shaxsiy Telegramingiz nomidan istalgan odamga bot orqali javob yozish mumkin.
-- **Moslashuvchan boshqaruv:** `/agent` buyrug'i orqali AI ni yoqish/o'chirish (`/agent on`, `/agent off`), AI xarakterini o'zgartirish (`/agent prompt <matn>`) va qora ro'yxatni boshqarish.
+### 5. 📱 Butun boshli Telegram akkauntini boshqarish
+- `/mychats` — Siz a'zo bo'lgan barcha guruhlar, kanallar va botlar ro'yxatini ko'rish.
+- `/read <chat_id> [soni]` — Istalgan kanal yoki guruhdagi so'nggi xabarlarni o'qish va AI orqali konspekt (xulosa) olish.
+- `/botcall <@bot> <buyruq>` — Siz ishlatadigan boshqa Telegram botlariga o'z nomingizdan buyruq berish va javobini olish.
+- `/reply <id> <matn>` — Shaxsiy akkauntingiz nomidan xabar yozish.
+
+### 6. 🔐 Istalgan akkauntdan xavfsiz kirish (Passcode)
+- Siz botga istalgan ikkinchi yoki uchinchi Telegram akkauntingizdan kirishingiz mumkin.
+- Shaxsiy chatda bot sizdan **maxfiy kirish kodini** so'raydi. Kodni to'g'ri kiritishingiz bilanoq to'liq Admin huquqiga ega bo'lasiz.
+- `/lock` — Botni darhol qulflash.
+- `/setcode <kod>` — Maxfiy kodni o'zgartirish.
+
+### 7. 👥 Guruhlar va Kanallarda ishlash
+- Botni istalgan guruhga qo'shing: `@bot_username` deb murojaat qilinsa yoki `/ai <savol>` deb yozilsa, bot guruh a'zolariga professional javob beradi.
+- Kanallarga `/post <kanal_id> <matn>` orqali post joylash.
 
 ---
 
 ## 🛠 Buyruqlar ro'yxati
 
-### Oddiy foydalanuvchilar uchun:
-- `/start` — Botni ishga tushirish
-- `/reset` yoki `/clear` — Suhbat tarixini tozalash
-- `/help` — Qo'llanma
-- `/about` — Bot haqida ma'lumot
-
-### Yaratuvchi (Creator) uchun:
-- `🔒 /lock` — Botni darhol qulflash (keyingi murojaatda maxfiy kod so'raladi)
-- `🔑 /setcode <kod>` — Maxfiy kirish kodini o'zgartirish
-- `/agent` — Shaxsiy AI Agent boshqaruv paneli (Holat, Yoqish/O'chirish, Statistika)
-- `/agent on` / `/agent off` — Shaxsiy lichkaga AI avto-javobni yoqish / o'chirish
-- `/agent prompt <matn>` — AI Agent xarakteri va ko'rsatmalarini o'zgartirish
-- `/reply <user_id> <matn>` — Shaxsiy akkauntingiz nomidan belgilangan kishiga xabar jo'natish
-- `/agent ignore <user_id>` — AI javob bermasligi uchun qora ro'yxatga kiritish
-- `/admin` — Umumiy boshqaruv paneli va statistika
-- `/send <target> <matn>` — Bot nomidan xabar yuborish
-- `/broadcast <matn>` — Umumiy e'lon tarqatish
-- `/chats` — Guruh va kanallar ro'yxati
-- `/post <kanal> <matn>` — Kanalga post
-- `/pin` — Xabarni qadash
+| Buyruq | Tavsif |
+|---|---|
+| `/start` | Botni ishga tushirish |
+| `/admin` | Kengaytirilgan boshqaruv paneli |
+| `/agent` | Shaxsiy AI Kotib (Userbot) paneli |
+| `/adapt <matn>` | Botni o'zingizga moslashtirish |
+| `/persona` | Hozirgi moslashuv profilini ko'rish |
+| `/blacklist` | Bloklanganlar ro'yxati va boshqarish |
+| `/block <id>` | Foydalanuvchini bloklash |
+| `/unblock <id>` | Blokdan chiqarish |
+| `/mychats` | Userbot ulangan chatlar va kanallar |
+| `/read <chat> [n]` | Kanal/guruh xabarlarini o'qish va AI xulosasi |
+| `/botcall <@bot> <cmd>` | Boshqa botlarga buyruq berish |
+| `/reply <id> <matn>` | O'z nomingizdan xabar jo'natish |
+| `/ai <savol>` | Guruhda AI ga savol berish |
+| `/broadcast <matn>` | Barcha a'zolarga e'lon tarqatish |
+| `/lock` | Botni qulflash |
+| `/setcode <kod>` | Kirish kodini o'zgartirish |
+| `/reset` | Suhbat tarixini tozalash |
 
 ---
 
-## 📲 Shaxsiy Telegram akkauntini ulash tartibi:
-1. Terminalda quyidagi buyruqni bering:
-   ```bash
-   python generate_session.py
-   ```
-2. Telefon raqamingizni kiriting (`+998...`) va Telegramingizga kelgan kodni yozing.
-3. Dastur avtomatik ravishda `.env` fayliga `TELEGRAM_STRING_SESSION` ni saqlaydi.
-4. Render.com ga deploy qilganda ham Environment Variables bo'limiga `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` va `TELEGRAM_STRING_SESSION` qiymatlarini kiritasiz.
+## 🚀 Oracle Cloud (VPS Always Free) serveriga o'rnatish
 
-## 🚀 Render.com serveriga joylash (Deploy qilish) bo'yicha qo'llanma
+Bot Oracle Cloud Ubuntu VPS da **24/7 uzluksiz** ishlashga to'liq moslashtirilgan.
 
-Bot Render.com da bepul (Free tier) rejimida uzluksiz ishlashga to'liq moslashtirilgan. Render talab qiladigan ichki Web-server (`aiohttp` health-check) `main.py` ga integratsiya qilingan.
+### 1. Server paketlarini o'rnatish:
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y python3-pip python3-venv git
+```
 
-### 1-qadam: Render.com ga kirish
-1. [dashboard.render.com](https://dashboard.render.com/) saytiga kiring.
-2. **New +** tugmasini bosing va **Web Service** ni tanlang (yoki **Blueprint** orqali `render.yaml` bilan).
+### 2. Loyihani yuklab olish:
+```bash
+git clone https://github.com/azizbekmaxsutboyev21/max-3ai-telegram-bot.git
+cd max-3ai-telegram-bot
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-### 2-qadam: Repositoriyani ulash
-1. GitHub hisobingizdagi ushbu repositoriyani tanlang (`Connect`).
+### 3. `.env` faylini sozlash:
+```bash
+cp .env.example .env
+nano .env
+```
+Kerakli kalitlarni to'ldiring (`BOT_TOKEN`, `GEMINI_API_KEY`, `CREATOR_ID`, `ACCESS_CODE`, `TELEGRAM_STRING_SESSION` va h.k.).
 
-### 3-qadam: Sozlamalar (Settings)
-- **Name:** `max-3ai-telegram-bot` (yoki ixtiyoriy nom)
-- **Region:** `Frankfurt (EU Central)`
-- **Branch:** `main`
-- **Runtime:** `Python 3`
-- **Build Command:** `pip install -r requirements.txt`
-- **Start Command:** `python main.py`
-- **Plan:** `Free`
+### 4. `systemd` orqali 24/7 rejimda ishga tushirish:
+```bash
+sudo nano /etc/systemd/system/telegram-bot.service
+```
+Quyidagi konfiguratsiyani qo'ying:
+```ini
+[Unit]
+Description=Telegram AI Bot (max-3ai-telegram-bot)
+After=network.target
 
-### 4-qadam: Muhit o'zgaruvchilari (Environment Variables)
-**Environment** bo'limida quyidagi o'zgaruvchilarni qo'shing:
-- `BOT_TOKEN` = Sizning Telegram bot tokeningiz (@BotFather dan)
-- `GEMINI_API_KEY` (yoki `GEMINI_API_KEYS`) = Google Gemini API kalit(lar)ingiz. Kvota tugamasligi uchun bir nechta kalitni vergul bilan yozish mumkin: `kalit1,kalit2,kalit3`
-- `GEMINI_MODEL` = `gemini-2.5-flash` (tavsiya etiladi; server band bo'lsa bot avtomatik zaxira modellarga o'tadi)
-- `CREATOR_ID` = `5772939710`
-- `PYTHON_VERSION` = `3.11.4`
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/max-3ai-telegram-bot
+ExecStart=/home/ubuntu/max-3ai-telegram-bot/venv/bin/python main.py
+Restart=always
+RestartSec=10
 
-### 5-qadam: Bepul 24/7 rejimda ushlab turish (Uxlashini oldini olish)
-Render.com Free Web Service 15 daqiqa murojaat bo'lmasa uxlab qoladi (spin down). Buni oldini olish va botni tunu-kun faol ushlab turish uchun:
-1. Render sizga bergan manzilni oling (masalan: `https://max-3ai-telegram-bot.onrender.com/health`).
-2. [UptimeRobot.com](https://uptimerobot.com) yoki [cron-job.org](https://cron-job.org) bepul saytiga kiring.
-3. Yangi monitor (HTTP GET) ochib, ushbu `/health` havolasini har **5 daqiqada** tekshirib turadigan qilib qo'ying.
-4. Natijada bot Render serverida **24/7 mutlaqo bepul va uzluksiz** ishlaydi! 🚀
+[Install]
+WantedBy=multi-user.target
+```
+
+Servisni yoqish:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable telegram-bot
+sudo systemctl start telegram-bot
+```
+
+Holatini tekshirish:
+```bash
+sudo systemctl status telegram-bot
+```
+Loglarni kuzatish:
+```bash
+journalctl -u telegram-bot -f
+```
