@@ -55,9 +55,13 @@ class GeminiService:
 
     def _prune_model(self, model_name: str):
         """Mavjud bo'lmagan (404) modelni ro'yxatdan olib tashlash"""
-        if model_name in self.fallback_models and len(self.fallback_models) > 1:
+        if model_name in self.fallback_models:
             self.fallback_models.remove(model_name)
-            self._current_model_idx = self._current_model_idx % len(self.fallback_models)
+            if self.fallback_models:
+                self._current_model_idx = self._current_model_idx % len(self.fallback_models)
+            else:
+                self.fallback_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+                self._current_model_idx = 0
             logger.warning(f"Model '{model_name}' ro'yxatdan o'chirildi. Qolgan zaxira modellar: {self.fallback_models}")
 
     def _prune_key(self, api_key: str):
@@ -78,7 +82,7 @@ class GeminiService:
         self,
         operation_name: str,
         call_factory: Callable[[genai.Client, str], Any],
-        max_retries: int = 3
+        max_retries: int = 6
     ) -> str:
         """
         Gemini so'rovlarini tezkor va bardoshli bajarish:
@@ -86,11 +90,13 @@ class GeminiService:
         - 503 va 429 xatoliklarida tezkor zaxira model/kalitga o'tadi.
         """
         last_error = ""
-        for attempt in range(1, max_retries + 1):
+        attempt = 0
+        while attempt < max_retries and self.fallback_models:
+            attempt += 1
             try:
                 client, key_str = self._get_active_client()
             except Exception as e:
-                return "⚠️ GEMINI_API_KEY sozlanmagan. Iltimos, .env faylida Google Gemini API kalitini kiriting."
+                return "⚠️ GEMINI_API_KEY sozlanmagan. Iltimos, serverdagi .env faylida Google Gemini API kalitini kiriting."
 
             model_name = self.fallback_models[self._current_model_idx % len(self.fallback_models)]
 
@@ -103,12 +109,12 @@ class GeminiService:
             except Exception as e:
                 err_msg = str(e)
                 last_error = err_msg
+                err_lower = err_msg.lower()
                 logger.warning(
                     f"Gemini {operation_name} urinish #{attempt}/{max_retries} muvaffaqiyatsiz bo'ldi "
                     f"(Model: {model_name}): {err_msg[:120]}"
                 )
 
-                err_lower = err_msg.lower()
                 is_503 = "503" in err_msg or "unavailable" in err_lower or "high demand" in err_lower
                 is_quota = "429" in err_msg or "resource_exhausted" in err_lower or "quota" in err_lower
                 is_invalid = (
@@ -117,7 +123,12 @@ class GeminiService:
                     "api key not valid" in err_lower or
                     "api key expired" in err_lower
                 )
-                is_not_found = "404" in err_msg or "not found" in err_lower
+                is_not_found = (
+                    "404" in err_msg or
+                    "not found" in err_lower or
+                    "no longer available" in err_lower or
+                    "is not supported" in err_lower and "model" in err_lower
+                )
                 is_location = (
                     "location is not supported" in err_lower or
                     "user location is not supported" in err_lower or
@@ -135,9 +146,10 @@ class GeminiService:
                     continue
 
                 if is_not_found:
-                    logger.warning(f"Model '{model_name}' topilmadi (404). Zaxira modelga o'tamiz...")
+                    logger.warning(f"Model '{model_name}' mavjud emas yoki o'chirilgan (404). Zaxira modelga o'tamiz...")
                     self._prune_model(model_name)
-                    self._rotate_model()
+                    # 404 da urinish sonini hisoblamaymiz, chunki bu shunchaki eskirgan model
+                    attempt -= 1
                     continue
 
                 if is_quota:
