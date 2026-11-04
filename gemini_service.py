@@ -82,15 +82,19 @@ class GeminiService:
         self,
         operation_name: str,
         call_factory: Callable[[genai.Client, str], Any],
-        max_retries: int = 6
+        max_retries: int = 5
     ) -> str:
         """
         Gemini so'rovlarini tezkor va bardoshli bajarish:
+        - Har bir yangi so'rovni eng tezkor asosiy modeldan (indeks 0) boshlaydi.
         - Noto'g'ri model (404) yoki yaroqsiz kalitlarni zudlik bilan chetlatadi.
-        - 503 va 429 xatoliklarida tezkor zaxira model/kalitga o'tadi.
+        - 503 va 429 xatoliklarida kutmasdan darhol zaxira model/kalitga o'tadi.
         """
         last_error = ""
         attempt = 0
+        # Har doim eng tezkor modeldan (indeks 0) boshlash
+        self._current_model_idx = 0
+
         while attempt < max_retries and self.fallback_models:
             attempt += 1
             try:
@@ -148,7 +152,6 @@ class GeminiService:
                 if is_not_found:
                     logger.warning(f"Model '{model_name}' mavjud emas yoki o'chirilgan (404). Zaxira modelga o'tamiz...")
                     self._prune_model(model_name)
-                    # 404 da urinish sonini hisoblamaymiz, chunki bu shunchaki eskirgan model
                     attempt -= 1
                     continue
 
@@ -156,15 +159,11 @@ class GeminiService:
                     self._rotate_key()
                     if len(self.api_keys) <= 1:
                         self._rotate_model()
-                    await asyncio.sleep(0.15)
                     continue
 
                 if is_503:
                     self._rotate_model()
-                    await asyncio.sleep(0.2)
                     continue
-
-                await asyncio.sleep(0.2)
 
         logger.error(f"Gemini {operation_name} barcha urinishlardan so'ng ishlamadi. Oxirgi xato: {last_error}")
         err_lower = last_error.lower()
@@ -210,6 +209,7 @@ class GeminiService:
                     config=types.GenerateContentConfig(
                         system_instruction=self.system_prompt,
                         temperature=0.7,
+                        max_output_tokens=1000,
                     )
                 )
 
@@ -359,6 +359,7 @@ class GeminiService:
                     config=types.GenerateContentConfig(
                         system_instruction=instruction,
                         temperature=0.6,
+                        max_output_tokens=300,
                     )
                 )
 
