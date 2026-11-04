@@ -919,10 +919,83 @@ async def handle_pin_message(message: Message, bot: Bot):
 
 _last_failed_send_action: Dict[int, Dict[str, Any]] = {}
 
+async def render_account_scan(message: Message):
+    """Akkauntni to'liq skanerlash va tahliliy hisobot berish"""
+    status_msg = await message.reply("🔍 **Akkaunt skanerlanmoqda...**\n_Chatlar, kanallar va o'qilmagan xabarlar tahlil qilinmoqda..._", parse_mode="Markdown")
+    scan_res = await userbot.scan_account_summary()
+    
+    if not scan_res.get("success"):
+        err_text = scan_res.get("error", "Noma'lum xatolik")
+        await status_msg.edit_text(
+            f"⚠️ **Akkauntni skanerlab bo'lmadi!**\n\n"
+            f"**Sabab:** {err_text}\n\n"
+            f"💡 _Bot ishlayotgan serverdagi `.env` faylida Telethon sessiyasi (Userbot) faolligini tekshiring._",
+            parse_mode="Markdown"
+        )
+        return
+
+    uname_str = f"(@{scan_res['username']})" if scan_res.get("username") else ""
+    phone_str = f"+{scan_res['phone']}" if scan_res.get("phone") else "Yashirin"
+    
+    text = (
+        f"⚡️ **AKKAUNT TO'LIQ SKANERLANDI!**\n\n"
+        f"👤 **Profil:** {scan_res['name']} {uname_str}\n"
+        f"🆔 **ID:** `{scan_res['id']}` | 📱 **Tel:** `{phone_str}`\n\n"
+        f"📊 **Muloqot statistikasi:**\n"
+        f"• 👤 Shaxsiy chatlar: **{scan_res['users_count']} ta**\n"
+        f"• 👥 Guruhlar: **{scan_res['groups_count']} ta**\n"
+        f"• 📢 Kanallar: **{scan_res['channels_count']} ta**\n"
+        f"• 🤖 Botlar: **{scan_res['bots_count']} ta**\n"
+        f"• 🔴 O'qilmagan xabarlar: **{scan_res['total_unreads']} ta** ({scan_res['unread_chats_count']} ta chatda)\n\n"
+        f"📋 **So'nggi faol chatlar:**\n"
+    )
+
+    for d in scan_res.get("recent_chats", [])[:8]:
+        icon = "📢" if d["type"] == "channel" else ("👥" if d["type"] == "group" else ("🤖" if d["type"] == "bot" else "👤"))
+        unread_badge = f" `[{d['unread_count']} yangi]`" if d.get("unread_count", 0) > 0 else ""
+        d_uname = f"(@{d['username']})" if d.get("username") else ""
+        text += f"{icon} **{d['title']}** {d_uname}{unread_badge}\n  ID: `{d['id']}`\n"
+
+    text += (
+        f"\n💡 **Foydali amallar:**\n"
+        f"• Xabarlarni o'qish: `/read <id yoki @username>`\n"
+        f"• Xabar yuborish: `/sendmsg <target> <matn>`\n"
+        f"• Barcha chatlar: `/mychats`"
+    )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📋 Barcha chatlar", callback_data="admin_mychats"),
+            InlineKeyboardButton(text="🔄 Qayta scan", callback_data="scan_account_refresh")
+        ],
+        [
+            InlineKeyboardButton(text="🤖 AI Kotib (Userbot)", callback_data="agent_panel"),
+            InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_main")
+        ]
+    ])
+
+    await status_msg.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+
+@router.callback_query(F.data == "scan_account_refresh")
+async def handle_scan_account_refresh(callback: CallbackQuery):
+    await callback.answer("Qayta skanerlanmoqda...")
+    await render_account_scan(callback.message)
+
+@router.message(Command("scan"))
+@router.message(Command("account"))
+async def handle_scan_command(message: Message):
+    """Akkauntni to'liq skanerlash buyrug'i"""
+    await render_account_scan(message)
+
 async def execute_ai_action_if_any(ai_reply: str, message: Message) -> bool:
     """AI javobidagi maxsus amallarni (Action) bajarish"""
     import re
     
+    # 0. SCAN_ACCOUNT (Akkauntni skanerlash)
+    if "[ACTION:SCAN_ACCOUNT]" in ai_reply or "[ACTION:MY_CHATS]" in ai_reply:
+        await render_account_scan(message)
+        return True
+
     # 1. SEND_MESSAGE (bitta chatga xabar yuborish)
     send_match = re.search(r"\[ACTION:SEND_MESSAGE\|TARGET:(.*?)\|TEXT:(.*?)\]", ai_reply, re.DOTALL)
     if send_match:
@@ -1234,6 +1307,17 @@ async def handle_text(message: Message, bot: Bot):
                     parse_mode="Markdown"
                 )
                 return
+
+    # 2. Akkauntni skanerlash tabiiy iboralari (Gemini-ni kutmasdan, zumda va aniq hisobot qaytarish)
+    scan_triggers = [
+        "scan qil", "skan qil", "skanerla", "akkauntni tekshir", "akkountimni scan",
+        "akkauntimni scan", "akkountni scan", "chatlarimni scan", "chatlarimni ko'rsat",
+        "guruhlarimni ko'rsat", "akkaunt holati", "profilni tekshir", "profilimni scan"
+    ]
+    lower_text = user_text.lower()
+    if any(trigger in lower_text for trigger in scan_triggers):
+        await render_account_scan(message)
+        return
 
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
     ai_reply = await gemini.generate_response(user_id=message.from_user.id, user_message=user_text)

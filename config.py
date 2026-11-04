@@ -24,31 +24,18 @@ def get_gemini_api_keys() -> list[str]:
     load_dotenv(override=True)
     raw = os.getenv("GEMINI_API_KEYS", "") or os.getenv("GEMINI_API_KEY", "")
     keys = [k.strip() for k in raw.split(",") if k.strip()]
-    default_b64 = [
-        "QVEuQWI4Uk42SmVaWlFjVE1WZ3NwV01pRER5eElJN3NhTVBMNkZSeEZxRUVPaTJTODlDeHc=",
-        "QVEuQWI4Uk42SzZhelo5R0l5U0EwS3l1bktwRUd0US1nT2RMU3NSd0h2d2hhODh4cW9LMFE=",
-        "QVEuQWI4Uk42TG9iOHFZbkppaG1MSnBVcDZBeUd0TEJzelk3SXhRWjJHUE5aSUcybFp5TFE="
-    ]
-    import base64
-    for b64 in default_b64:
-        try:
-            dk = base64.b64decode(b64).decode("utf-8").strip()
-            if dk and dk not in keys:
-                keys.append(dk)
-        except Exception:
-            pass
     return keys
 
 def get_gemini_model() -> str:
-    m = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
-    if m in ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]:
-        m = "gemini-2.5-flash"
-    return m or "gemini-2.5-flash"
+    m = os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip()
+    if m in ["gemini-2.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash"]:
+        m = "gemini-2.0-flash"
+    return m or "gemini-2.0-flash"
 
 def get_gemini_fallback_models() -> list[str]:
     """Asosiy model 503 yoki limitga tushganda avtomatik o'tish uchun zaxira modellar"""
     primary = get_gemini_model()
-    defaults = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.8-flash"]
+    defaults = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash"]
     models = [primary]
     for m in defaults:
         if m not in models:
@@ -111,6 +98,8 @@ DEFAULT_SYSTEM_PROMPT = (
     "[ACTION:SEND_MULTIPLE|TARGETS:<chat1,chat2,...>|TEXT:<yuboriladigan xabar>]\n\n"
     "3. Reaksiya (emoji) bildirish buyurilsa:\n"
     "[ACTION:REACT|TARGET:<chat>|MSG_ID:<xabar_id>|EMOJI:<emoji>]\n\n"
+    "4. Akkauntni tekshirish, skanerlash yoki chatlar/kontaktlar ro'yxatini ko'rish so'ralsa:\n"
+    "[ACTION:SCAN_ACCOUNT]\n\n"
     "Oddiy savol va maslahatlarda esa odatdagidek chiroyli va mukammal matn bilan javob bering."
 )
 

@@ -337,6 +337,49 @@ class UserbotService:
             logger.error(f"Dialoglarni olishda xatolik: {e}")
         return result
 
+    async def scan_account_summary(self) -> Dict[str, Any]:
+        """Akkauntdagi barcha chatlar, guruhlar, kanallar va o'qilmagan xabarlarni to'liq skanerlash"""
+        if not self.is_running or not self.client:
+            return {
+                "success": False,
+                "error": "Userbot (Telethon) hozirda ulanmagan. Iltimos, serverdagi .env faylida TELEGRAM_STRING_SESSION, TELEGRAM_API_ID va TELEGRAM_API_HASH sozlanganligini tekshiring."
+            }
+
+        try:
+            me = await self.client.get_me()
+            dialogs = await self.get_dialogs_list(filter_type="all", limit=60)
+
+            user_chats = [d for d in dialogs if d["type"] == "user"]
+            group_chats = [d for d in dialogs if d["type"] == "group"]
+            channel_chats = [d for d in dialogs if d["type"] == "channel"]
+            bot_chats = [d for d in dialogs if d["type"] == "bot"]
+
+            unread_dialogs = [d for d in dialogs if d.get("unread_count", 0) > 0]
+            total_unreads = sum(d.get("unread_count", 0) for d in unread_dialogs)
+
+            first_name = getattr(me, "first_name", "") or ""
+            last_name = getattr(me, "last_name", "") or ""
+            full_name = f"{first_name} {last_name}".strip() or "Noma'lum"
+
+            return {
+                "success": True,
+                "name": full_name,
+                "username": getattr(me, "username", None),
+                "id": me.id,
+                "phone": getattr(me, "phone", None),
+                "total_dialogs": len(dialogs),
+                "users_count": len(user_chats),
+                "groups_count": len(group_chats),
+                "channels_count": len(channel_chats),
+                "bots_count": len(bot_chats),
+                "unread_chats_count": len(unread_dialogs),
+                "total_unreads": total_unreads,
+                "recent_chats": dialogs[:10]
+            }
+        except Exception as e:
+            logger.error(f"Akkauntni skanerlashda xatolik: {e}")
+            return {"success": False, "error": str(e)}
+
     async def get_chat_history_text(self, target: Any, limit: int = 15) -> str:
         """Istalgan guruh, kanal yoki chatdan so'nggi xabarlarni o'qish"""
         if not self.is_running or not self.client:

@@ -53,6 +53,20 @@ class GeminiService:
             self._current_model_idx = (self._current_model_idx + 1) % len(self.fallback_models)
             logger.info(f"Zaxira modelga o'tildi: {self.fallback_models[self._current_model_idx]}")
 
+    def _prune_model(self, model_name: str):
+        """Mavjud bo'lmagan (404) modelni ro'yxatdan olib tashlash"""
+        if model_name in self.fallback_models and len(self.fallback_models) > 1:
+            self.fallback_models.remove(model_name)
+            self._current_model_idx = self._current_model_idx % len(self.fallback_models)
+            logger.warning(f"Model '{model_name}' ro'yxatdan o'chirildi. Qolgan zaxira modellar: {self.fallback_models}")
+
+    def _prune_key(self, api_key: str):
+        """Yaroqsiz (invalid) API kalitni ro'yxatdan butunlay o'chirish"""
+        if api_key in self.api_keys and len(self.api_keys) > 1:
+            self.api_keys.remove(api_key)
+            self._current_key_idx = self._current_key_idx % len(self.api_keys)
+            logger.warning(f"Yaroqsiz API kalit o'chirildi. Qolgan faol kalitlar: {len(self.api_keys)} ta")
+
     def reset_chat(self, user_id: int) -> bool:
         """Foydalanuvchi suhbat tarixini tozalash (yangi suhbat boshlash)"""
         if user_id in self._user_histories:
@@ -64,17 +78,20 @@ class GeminiService:
         self,
         operation_name: str,
         call_factory: Callable[[genai.Client, str], Any],
-        max_retries: int = 4
+        max_retries: int = 3
     ) -> str:
         """
-        503 UNAVAILABLE (yuqori yuklanish) va 429 RESOURCE_EXHAUSTED (kvota) xatoliklariga qarshi:
-        - Exponential Backoff (kutib qayta urinish)
-        - Multi-API Key Rotation (boshqa kalitga o'tish)
-        - Fallback Model switching (boshqa zaxira modelga o'tish)
+        Gemini so'rovlarini tezkor va bardoshli bajarish:
+        - Noto'g'ri model (404) yoki yaroqsiz kalitlarni zudlik bilan chetlatadi.
+        - 503 va 429 xatoliklarida tezkor zaxira model/kalitga o'tadi.
         """
         last_error = ""
         for attempt in range(1, max_retries + 1):
-            client, key_str = self._get_active_client()
+            try:
+                client, key_str = self._get_active_client()
+            except Exception as e:
+                return "⚠️ GEMINI_API_KEY sozlanmagan. Iltimos, .env faylida Google Gemini API kalitini kiriting."
+
             model_name = self.fallback_models[self._current_model_idx % len(self.fallback_models)]
 
             try:
@@ -97,13 +114,14 @@ class GeminiService:
                 is_not_found = "404" in err_msg or "not found" in err_msg.lower()
 
                 if is_invalid:
-                    logger.error("API kalit yaroqsiz! Kalitni almashtiramiz...")
+                    logger.error(f"API kalit yaroqsiz! ({key_str[:8]}...) O'chirib, keyingisiga o'tamiz.")
+                    self._prune_key(key_str)
                     self._rotate_key()
-                    await asyncio.sleep(0.2)
                     continue
 
                 if is_not_found:
                     logger.warning(f"Model '{model_name}' topilmadi (404). Zaxira modelga o'tamiz...")
+                    self._prune_model(model_name)
                     self._rotate_model()
                     continue
 
@@ -111,24 +129,25 @@ class GeminiService:
                     self._rotate_key()
                     if len(self.api_keys) <= 1:
                         self._rotate_model()
-                    await asyncio.sleep(0.4)
+                    await asyncio.sleep(0.15)
                     continue
 
                 if is_503:
                     self._rotate_model()
-                    delay = 0.5 * attempt
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(0.2)
                     continue
 
-                await asyncio.sleep(0.4)
+                await asyncio.sleep(0.2)
 
         logger.error(f"Gemini {operation_name} barcha urinishlardan so'ng ishlamadi. Oxirgi xato: {last_error}")
         if "503" in last_error or "UNAVAILABLE" in last_error:
-            return "⚠️ AI serverlarida ayni paytda yuqori yuklanish kuzatilmoqda. 1-2 daqiqadan so'ng qayta yozing."
+            return "⚠️ AI serverlarida ayni paytda yuqori yuklanish kuzatilmoqda (503). 1-2 daqiqadan so'ng qayta yozing."
         elif "429" in last_error or "quota" in last_error.lower() or "RESOURCE_EXHAUSTED" in last_error:
-            return "⚠️ API so'rovlar limiti vaqtinchalik to'ldi. Birozdan so'ng qayta urinib ko'ring."
+            return "⚠️ API so'rovlar limiti vaqtinchalik to'ldi (429). Birozdan so'ng qayta urinib ko'ring."
+        elif "API_KEY_INVALID" in last_error or "invalid api key" in last_error.lower():
+            return "⚠️ Google Gemini API kalitida xatolik bor (yaroqsiz kalit). Iltimos, .env faylida GEMINI_API_KEY ni tekshiring."
         else:
-            return "⚠️ Server bilan ulanishda vaqtinchalik xatolik yuz berdi."
+            return "⚠️ Server bilan ulanishda vaqtinchalik xatolik yuz berdi. Iltimos, GEMINI_API_KEY to'g'riligini tekshiring."
 
     async def generate_response(self, user_id: int, user_message: str) -> str:
         """Foydalanuvchi matnli xabariga AI javobini olish"""
