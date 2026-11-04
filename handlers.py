@@ -371,6 +371,9 @@ def build_admin_main_kb():
         ],
         [
             InlineKeyboardButton(text="📊 To'liq statistika", callback_data="admin_stats"),
+            InlineKeyboardButton(text="🔑 API Kalitlar", callback_data="admin_apikeys")
+        ],
+        [
             InlineKeyboardButton(text="🔄 Yangilash", callback_data="admin_main")
         ]
     ])
@@ -473,6 +476,34 @@ async def handle_admin_callbacks(callback: CallbackQuery):
                 text += f"{icon} **{d['title']}** {uname}\n  ID: `{d['id']}`\n"
             text += "\nXabarlarni o'qish uchun: `/read <id yoki @username>`"
         kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Asosiy Menyu", callback_data="admin_main")]
+        ])
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+
+    elif data == "admin_apikeys":
+        await callback.answer("API kalitlar tekshirilmoqda...")
+        report = await gemini.check_api_keys_health()
+        if report["total"] == 0:
+            text = (
+                "❌ **API kalitlar topilmadi!**\n\n"
+                "Serveringizdagi `.env` faylida `GEMINI_API_KEYS` sozlanmagan."
+            )
+        else:
+            lines = [
+                "🔑 **Gemini API Kalitlari Tahlili:**\n",
+                f"📊 **Jami aniqlangan:** {report['total']} ta",
+                f"🟢 **Faol (ishlayotgan):** {report['active']} ta",
+                f"🔴 **Nosoz yoki cheklangan:** {report['total'] - report['active']} ta\n",
+                f"📡 **Model:** `{report['model_tested']}`\n",
+                "**Barcha kalitlar holati:**"
+            ]
+            for item in report["results"]:
+                icon = "🟢" if item["status"] == "active" else ("🟡" if item["status"] == "quota_exceeded" else "🔴")
+                lines.append(f"{icon} `{item['masked']}` — **{item['message']}**")
+            lines.append(f"\n💡 *Bot faol {report['active']} ta kalit o'rtasida yuklamani avtomatik taqsimlaydi.*")
+            text = "\n".join(lines)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔄 Qayta tekshirish", callback_data="admin_apikeys")],
             [InlineKeyboardButton(text="🔙 Asosiy Menyu", callback_data="admin_main")]
         ])
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
@@ -1018,6 +1049,39 @@ async def handle_scan_account_refresh(callback: CallbackQuery):
 async def handle_scan_command(message: Message):
     """Akkauntni to'liq skanerlash buyrug'i"""
     await render_account_scan(message)
+
+@router.message(Command("keys"))
+@router.message(Command("apikeys"))
+async def handle_apikeys_command(message: Message):
+    """Barcha Gemini API kalitlarini birma-bir sinab hisobot berish"""
+    status_msg = await message.reply("⏳ **Barcha API kalitlar sinovdan o'tkazilmoqda...**", parse_mode="Markdown")
+    report = await gemini.check_api_keys_health()
+    if report["total"] == 0:
+        await status_msg.edit_text(
+            "❌ **API kalitlar topilmadi!**\n\n"
+            "Serveringizdagi `.env` faylida `GEMINI_API_KEYS` sozlanmagan.",
+            parse_mode="Markdown"
+        )
+        return
+
+    lines = [
+        "🔑 **Gemini API Kalitlari Tahlili:**\n",
+        f"📊 **Jami aniqlangan:** {report['total']} ta",
+        f"🟢 **Faol (ishlayotgan):** {report['active']} ta",
+        f"🔴 **Nosoz yoki cheklangan:** {report['total'] - report['active']} ta\n",
+        f"📡 **Model:** `{report['model_tested']}`\n",
+        "**Kalitlar holati:**"
+    ]
+    for item in report["results"]:
+        icon = "🟢" if item["status"] == "active" else ("🟡" if item["status"] == "quota_exceeded" else "🔴")
+        lines.append(f"{icon} `{item['masked']}` — **{item['message']}**")
+
+    lines.append(f"\n💡 *Bot faol {report['active']} ta kalit o'rtasida yuklamani avtomatik taqsimlaydi.*")
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Qayta tekshirish", callback_data="admin_apikeys")],
+        [InlineKeyboardButton(text="👑 Admin Panel", callback_data="admin_main")]
+    ])
+    await status_msg.edit_text("\n".join(lines), reply_markup=kb, parse_mode="Markdown")
 
 async def execute_ai_action_if_any(ai_reply: str, message: Message) -> bool:
     """AI javobidagi maxsus amallarni (Action) bajarish"""

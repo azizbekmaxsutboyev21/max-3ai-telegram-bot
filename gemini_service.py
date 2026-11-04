@@ -1,5 +1,6 @@
 import asyncio
 import io
+import time
 import logging
 from typing import Dict, List, Optional, Callable, Any
 from PIL import Image
@@ -394,3 +395,64 @@ class GeminiService:
         except Exception as e:
             logger.error(f"Konspekt yaratishda xatolik: {e}")
             return "Xabarlarni konspekt qilishda xatolik yuz berdi."
+
+    async def check_api_keys_health(self) -> Dict[str, Any]:
+        """Barcha sozlangan API kalitlarni birma-bir sinab, ularning faolligini aniqlash"""
+        keys = config.get_gemini_api_keys()
+        if not keys:
+            return {"total": 0, "active": 0, "results": [], "model_tested": self.model_name}
+
+        results = []
+        active_count = 0
+        model = self.fallback_models[0] if self.fallback_models else "gemini-3.5-flash-lite"
+
+        for idx, key in enumerate(keys, 1):
+            masked_key = f"{key[:6]}...{key[-4:]}" if len(key) > 10 else f"Key #{idx}"
+            start_t = time.time()
+            try:
+                client = self._get_client_for_key(key)
+                def _ping(c: genai.Client, m: str):
+                    return c.models.generate_content(
+                        model=m,
+                        contents="ping",
+                        config=types.GenerateContentConfig(max_output_tokens=5)
+                    )
+                await asyncio.to_thread(_ping, client, model)
+                elapsed = round(time.time() - start_t, 2)
+                results.append({
+                    "index": idx,
+                    "masked": masked_key,
+                    "status": "active",
+                    "latency": elapsed,
+                    "message": f"Faol ({elapsed}s)"
+                })
+                active_count += 1
+            except Exception as e:
+                err = str(e).lower()
+                elapsed = round(time.time() - start_t, 2)
+                if "429" in err or "quota" in err or "resource_exhausted" in err:
+                    msg = "Kvota to'lgan (429)"
+                    st = "quota_exceeded"
+                elif "api_key_invalid" in err or "api key not valid" in err or "invalid api key" in err:
+                    msg = "Yaroqsiz kalit"
+                    st = "invalid"
+                elif "location is not supported" in err:
+                    msg = "Hudud cheklovi (IP)"
+                    st = "geo_blocked"
+                else:
+                    msg = str(e)[:35]
+                    st = "error"
+                results.append({
+                    "index": idx,
+                    "masked": masked_key,
+                    "status": st,
+                    "latency": elapsed,
+                    "message": msg
+                })
+
+        return {
+            "total": len(keys),
+            "active": active_count,
+            "results": results,
+            "model_tested": model
+        }
