@@ -1,6 +1,8 @@
 import io
+import re
+import time
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from aiogram import Router, F, Bot, BaseMiddleware
 from aiogram.filters import CommandStart, Command
 from aiogram.types import (
@@ -919,6 +921,36 @@ async def handle_pin_message(message: Message, bot: Bot):
 
 _last_failed_send_action: Dict[int, Dict[str, Any]] = {}
 
+def extract_send_intent(user_text: str) -> Optional[Tuple[str, str]]:
+    """
+    O'zbek tilidagi tabiiy xabar yuborish jumlalarini aniqlash:
+    Masalan: 'zebo ga salom deb yoz', 'zeboga salom deb yoz', 'Aliga bugun ko'rishamiz deb ayt'
+    """
+    clean = user_text.strip()
+    # 1-shablon: "X ga Y deb yoz/ayt/yubor" (orasida bo'sh joy bilan)
+    m = re.search(
+        r"^(?P<target>@?[\w\+\.\-]+?)(?:\s+(?:ga|ka|qa|ge))\s+(?P<text>.+?)\s+deb\s+(?:yoz|ayt|yubor|jo'?nat|yetkaz)(?:vor)?\.?$",
+        clean,
+        re.IGNORECASE
+    )
+    if not m:
+        # 2-shablon: "Xga Y deb yoz/ayt/yubor" (qo'shilib ketgan bo'lsa: "zeboga salom deb yoz")
+        m = re.search(
+            r"^(?P<target>@?[\w\+\.\-]+?)(?:ga|ka|qa|ge)\s+(?P<text>.+?)\s+deb\s+(?:yoz|ayt|yubor|jo'?nat|yetkaz)(?:vor)?\.?$",
+            clean,
+            re.IGNORECASE
+        )
+    
+    if m:
+        target = m.group("target").strip()
+        text = m.group("text").strip()
+        for suf in ["ga", "ka", "qa", "ge"]:
+            if target.lower().endswith(suf) and len(target) > len(suf) + 2 and not target.startswith("@"):
+                target = target[:-len(suf)]
+                break
+        return target, text
+    return None
+
 async def render_account_scan(message: Message):
     """Akkauntni to'liq skanerlash va tahliliy hisobot berish"""
     status_msg = await message.reply("🔍 **Akkaunt skanerlanmoqda...**\n_Chatlar, kanallar va o'qilmagan xabarlar tahlil qilinmoqda..._", parse_mode="Markdown")
@@ -1318,6 +1350,34 @@ async def handle_text(message: Message, bot: Bot):
     if any(trigger in lower_text for trigger in scan_triggers):
         await render_account_scan(message)
         return
+
+    # 3. Tabiiy tildagi xabar yuborish buyrug'i: masalan, "zebo ga salom deb yoz"
+    send_intent = extract_send_intent(user_text)
+    if send_intent:
+        target, text_to_send = send_intent
+        status_msg = await message.reply(f"⏳ `{target}` ga xabar yuborilmoqda...")
+        res = await userbot.send_to_target(target, text_to_send)
+        if res["success"]:
+            _last_failed_send_action.pop(message.from_user.id, None)
+            await status_msg.edit_text(
+                f"✅ **Xabar muvaffaqiyatli yuborildi!**\n\n"
+                f"🎯 **Qayerga:** {res['chat_title']}\n"
+                f"💬 **Xabar:** {text_to_send}",
+                parse_mode="Markdown"
+            )
+            return
+        else:
+            _last_failed_send_action[message.from_user.id] = {
+                "target": target,
+                "text": text_to_send,
+                "time": time.time()
+            }
+            await status_msg.edit_text(
+                f"❌ **Xabar yuborishda xatolik:**\n{res['error']}\n\n"
+                f"💡 *Agar bu shaxsning Telegram ID si yoki @username ini bilsangiz, shunchaki yuboring (masalan: `8927070806` yoki `@username`), bot uni o'zi yetkazadi.*",
+                parse_mode="Markdown"
+            )
+            return
 
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
     ai_reply = await gemini.generate_response(user_id=message.from_user.id, user_message=user_text)

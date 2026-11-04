@@ -108,10 +108,25 @@ class GeminiService:
                     f"(Model: {model_name}): {err_msg[:120]}"
                 )
 
-                is_503 = "503" in err_msg or "UNAVAILABLE" in err_msg or "high demand" in err_msg.lower()
-                is_quota = "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower()
-                is_invalid = "API_KEY_INVALID" in err_msg or "invalid api key" in err_msg.lower()
-                is_not_found = "404" in err_msg or "not found" in err_msg.lower()
+                err_lower = err_msg.lower()
+                is_503 = "503" in err_msg or "unavailable" in err_lower or "high demand" in err_lower
+                is_quota = "429" in err_msg or "resource_exhausted" in err_lower or "quota" in err_lower
+                is_invalid = (
+                    "api_key_invalid" in err_lower or
+                    "invalid api key" in err_lower or
+                    "api key not valid" in err_lower or
+                    "api key expired" in err_lower
+                )
+                is_not_found = "404" in err_msg or "not found" in err_lower
+                is_location = (
+                    "location is not supported" in err_lower or
+                    "user location is not supported" in err_lower or
+                    "country not supported" in err_lower
+                )
+
+                if is_location:
+                    logger.error("Gemini server joylashgan hududda (IP) cheklangan!")
+                    break
 
                 if is_invalid:
                     logger.error(f"API kalit yaroqsiz! ({key_str[:8]}...) O'chirib, keyingisiga o'tamiz.")
@@ -140,14 +155,29 @@ class GeminiService:
                 await asyncio.sleep(0.2)
 
         logger.error(f"Gemini {operation_name} barcha urinishlardan so'ng ishlamadi. Oxirgi xato: {last_error}")
-        if "503" in last_error or "UNAVAILABLE" in last_error:
+        err_lower = last_error.lower()
+        if "location is not supported" in err_lower or "country not supported" in err_lower:
+            return (
+                "⚠️ **Google Gemini hududiy cheklovi:** Serveringiz IP manzili joylashgan hududda Google Gemini cheklangan "
+                "(`User location is not supported`).\n\n"
+                "💡 **Yechim:** Serveringizda VPN/Proxy sozlang yoki Yevropa/AQSH VPS serveridan foydalaning."
+            )
+        elif "api_key_invalid" in err_lower or "invalid api key" in err_lower or "api key not valid" in err_lower:
+            return (
+                "⚠️ **Google Gemini API kaliti yaroqsiz!** (`API key not valid`)\n\n"
+                "💡 **Yechim:** [Google AI Studio](https://aistudio.google.com/) saytiga kirib, yangi bepul API kalit oling "
+                "va serveringizdagi `.env` faylida `GEMINI_API_KEY` qatoriga qo'ying."
+            )
+        elif "503" in last_error or "unavailable" in err_lower:
             return "⚠️ AI serverlarida ayni paytda yuqori yuklanish kuzatilmoqda (503). 1-2 daqiqadan so'ng qayta yozing."
-        elif "429" in last_error or "quota" in last_error.lower() or "RESOURCE_EXHAUSTED" in last_error:
-            return "⚠️ API so'rovlar limiti vaqtinchalik to'ldi (429). Birozdan so'ng qayta urinib ko'ring."
-        elif "API_KEY_INVALID" in last_error or "invalid api key" in last_error.lower():
-            return "⚠️ Google Gemini API kalitida xatolik bor (yaroqsiz kalit). Iltimos, .env faylida GEMINI_API_KEY ni tekshiring."
+        elif "429" in last_error or "quota" in err_lower or "resource_exhausted" in err_lower:
+            return "⚠️ API so'rovlar limiti vaqtinchalik to'ldi (429). Birozdan so'ng qayta urinib ko'ring yoki boshqa API kalit qo'shing."
         else:
-            return "⚠️ Server bilan ulanishda vaqtinchalik xatolik yuz berdi. Iltimos, GEMINI_API_KEY to'g'riligini tekshiring."
+            clean_err = last_error.split("\n")[0][:140]
+            return (
+                f"⚠️ **Server bilan ulanishda xatolik yuz berdi:**\n`{clean_err}`\n\n"
+                "Iltimos, serveringizdagi `.env` faylida `GEMINI_API_KEY` to'g'riligini tekshiring."
+            )
 
     async def generate_response(self, user_id: int, user_message: str) -> str:
         """Foydalanuvchi matnli xabariga AI javobini olish"""
